@@ -26,6 +26,25 @@ export const TASK_TYPES = [
   'rule',
 ] as const;
 
+/** Markers written in front of an activity keyword; see `ACTIVITY_ATTRIBUTES` for the long form. */
+export const ACTIVITY_MARKERS = ['loop', 'parallel', 'sequential', 'ad-hoc'] as const;
+
+/** The values `loop:` takes: a standard loop, or multi-instance run in parallel or in sequence. */
+export const LOOP_KINDS = ['standard', 'parallel', 'sequential'] as const;
+
+/**
+ * The attributes each element accepts in its trailing `@{ }` block. An element kind
+ * missing from this table takes none, and a key missing from its row is refused.
+ */
+export const ELEMENT_ATTRIBUTES = {
+  task: ['loop', 'compensation'],
+  call: ['loop', 'compensation'],
+  subprocess: ['loop', 'compensation', 'adhoc'],
+  xor: ['marker'],
+  data: ['state'],
+  pool: ['multiple'],
+} as const satisfies Record<string, readonly string[]>;
+
 export const TRIGGERS_BY_POSITION = {
   start: [
     'none',
@@ -82,3 +101,5 @@ export const positionsFor = (trigger: string): string[] =>
 export type BpmnDirection = (typeof BPMN_DIRECTIONS)[number];
 export type EventTrigger = (typeof EVENT_TRIGGERS)[number];
 export type TaskType = (typeof TASK_TYPES)[number];
+export type ActivityMarker = (typeof ACTIVITY_MARKERS)[number];
+export type LoopKind = (typeof LOOP_KINDS)[number];

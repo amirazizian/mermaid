@@ -13,6 +13,10 @@ import { stampColorSlot } from '../../../diagrams/common/colorThemeGate.js';
  * swimlane-specific rendering lives on its own; registered in the clusters.js
  * shape dispatch table. Supports LR/TB and the handdrawn (rough) look.
  */
+const MULTIPLICITY_HEIGHT = 10;
+const MULTIPLICITY_GAP = 4;
+const MULTIPLICITY_INSET = 4;
+
 export const swimlane = async (parent, node, { variant = 'swimlane' } = {}) => {
   const isPool = variant === 'pool';
   const groupClass = isPool ? 'pool swimlane' : 'swimlane';
@@ -226,6 +230,25 @@ export const swimlane = async (parent, node, { variant = 'swimlane' } = {}) => {
     const labelX = node.x - bbox.width / 2;
     const labelY = laneTop + (titleHeight - bbox.height) / 2;
     labelEl.attr('transform', `translate(${labelX}, ${labelY})`);
+  }
+
+  // A participant that stands for several of its kind carries the multiplicity marker,
+  // three short bars centred on the bottom edge of the band.
+  if (node.metadata?.multiplicity === true) {
+    const bottom = laneBottom - MULTIPLICITY_INSET;
+    const top = bottom - MULTIPLICITY_HEIGHT;
+    shapeSvg
+      .append('path')
+      .attr('class', 'participant-multiplicity')
+      .attr(
+        'd',
+        [-MULTIPLICITY_GAP, 0, MULTIPLICITY_GAP]
+          .map((dx) => `M${node.x + dx},${top} V${bottom}`)
+          .join(' ')
+      )
+      .attr('fill', 'none')
+      .attr('stroke', laneStroke)
+      .attr('stroke-width', 2);
   }
 
   log.trace('Swimlane data ', node, JSON.stringify(node));

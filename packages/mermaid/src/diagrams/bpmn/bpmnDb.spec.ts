@@ -152,9 +152,13 @@ describe('bpmnDb', () => {
       expect(glyph(node)).toBe(type);
     });
 
-    it('marks a subprocess with its own glyph', () => {
+    // BPMN 2.0.2 draws the collapsed sub-process marker centred on the bottom edge, in the
+    // row the loop, ad-hoc and compensation markers share, rather than in the corner.
+    it('marks a subprocess with the + marker on its bottom edge', () => {
       const { nodes } = build('bpmn-beta LR\n  lane "L"\n    subprocess s "S"');
-      expect(glyph(nodeById(nodes, 's'))).toBe('subprocess');
+      const s = nodeById(nodes, 's') as Node & Drawn & { markers?: string[] };
+      expect(glyph(s)).toBeUndefined();
+      expect(s.markers).toEqual(['bpmn:subprocess']);
     });
   });
 

@@ -255,6 +255,106 @@ bpmn-beta LR
   t1 --> t2 --> t3 --> sp1 --> c1
 ```
 
+### Activity markers
+
+The markers along an activity's bottom edge are written as a word in front of its keyword.
+`loop` repeats the activity, `parallel` and `sequential` run one instance per item, at once or
+one after another, and `ad-hoc` marks a sub-process whose steps may run in any order. A
+collapsed sub-process always carries its `+`.
+
+```mermaid
+bpmn-beta LR
+  lane "Fulfilment"
+    loop task t1 "Retry payment"
+    parallel user task t2 "Review each item"
+    sequential task t3 "Notify each buyer"
+    ad-hoc subprocess s1 "Research"
+    task t4 "Refund" @{ compensation: true }
+  t1 --> t2 --> t3 --> s1
+```
+
+```mermaid-example
+bpmn-beta LR
+  lane "Fulfilment"
+    loop task t1 "Retry payment"
+    parallel user task t2 "Review each item"
+    sequential task t3 "Notify each buyer"
+    ad-hoc subprocess s1 "Research"
+    task t4 "Refund" @{ compensation: true }
+  t1 --> t2 --> t3 --> s1
+```
+
+Only one of `loop`, `parallel` and `sequential` can be written on an activity, and `ad-hoc`
+only in front of `subprocess`. The compensation marker has no word of its own, because
+`compensation` is already a trigger, so it is written as an attribute.
+
+A call activity takes a task type in front of it, for a call to a global task, and is
+followed by `subprocess` when it calls a process, which draws the `+`:
+
+```mermaid
+bpmn-beta LR
+  lane "Orders"
+    user call c1 "Approve with manager"
+    call subprocess c2 "Invoicing"
+  c1 --> c2
+```
+
+```mermaid-example
+bpmn-beta LR
+  lane "Orders"
+    user call c1 "Approve with manager"
+    call subprocess c2 "Invoicing"
+  c1 --> c2
+```
+
+## Attributes
+
+Anything about an element that is not its kind, its id or its label is written in a trailing
+`@{ }` block, the same form flowcharts and kanban boards use. The block holds `key: value`
+pairs separated by commas, and an element only accepts the keys listed for it:
+
+| Element                                                | Attribute      | Values                                           |
+| ------------------------------------------------------ | -------------- | ------------------------------------------------ |
+| `task`, `subprocess`, `call`                           | `loop`         | `true`, `standard`, `parallel`, `sequential`     |
+| `task`, `subprocess`, `call`                           | `compensation` | `true` or `false`                                |
+| `subprocess`                                           | `adhoc`        | `true` or `false`                                |
+| `xor`                                                  | `marker`       | `none` or `false` draws it without its X         |
+| `data`, `data-input`, `data-output`, `data-collection` | `state`        | a name, drawn under the label in brackets        |
+| `pool`                                                 | `multiple`     | `true` draws the participant multiplicity marker |
+
+```mermaid
+bpmn-beta LR
+  pool buyer "Buyer"
+    lane "Purchasing"
+      start s1 "Need"
+      task t1 "Prepare order"
+      data d1 "Order" @{ state: approved }
+      xor g1 "Urgent?" @{ marker: none }
+      end e1 "Sent"
+  pool suppliers "Suppliers" @{ multiple: true }
+  s1 --> t1 --> g1 --> e1
+  t1 ..> d1
+  t1 -.-> suppliers
+```
+
+```mermaid-example
+bpmn-beta LR
+  pool buyer "Buyer"
+    lane "Purchasing"
+      start s1 "Need"
+      task t1 "Prepare order"
+      data d1 "Order" @{ state: approved }
+      xor g1 "Urgent?" @{ marker: none }
+      end e1 "Sent"
+  pool suppliers "Suppliers" @{ multiple: true }
+  s1 --> t1 --> g1 --> e1
+  t1 ..> d1
+  t1 -.-> suppliers
+```
+
+A key an element does not take, or a value it cannot use, is refused with the line and the
+column of the block.
+
 ## Boundary events
 
 A boundary event is attached to an activity by indenting it under that activity. It is drawn on the activity's border, and a flow out of it is the exception path.
@@ -516,7 +616,6 @@ While the diagram is in beta, its syntax can change between releases. Once the s
 ## Current limitations
 
 - An event sub-process and a transaction have no syntax, so the two rules that depend on one are wider here than in the notation: `error`, `escalation` and `compensation` are accepted on any `start`, and `cancel` on any `boundary` or `end`. Every other position and trigger pair is checked.
-- Activity markers (loop, parallel and sequential multi-instance, ad-hoc, compensation) have no syntax yet.
 - A group is contained by one lane, so it cannot yet stretch across pools the way BPMN 2.0.2 Figure 8.14 shows.
 - An artifact is drawn beside the element it is associated with, so one associated across a lane boundary is drawn in that element's lane rather than the lane it was written in.
 - Choreography and conversation diagrams are separate BPMN diagram types with their own shapes, and neither has syntax here.

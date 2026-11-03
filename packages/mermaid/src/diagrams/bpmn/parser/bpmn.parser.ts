@@ -1,8 +1,10 @@
 import { CstParser, Lexer } from 'chevrotain';
 import type { CstNode, IToken } from 'chevrotain';
+import * as yaml from 'js-yaml';
 import * as t from './bpmn.tokens.js';
 import { bpmnTokens } from './bpmn.tokens.js';
-import { TRIGGERS_BY_POSITION, positionsFor } from '../types.js';
+import { ELEMENT_ATTRIBUTES, LOOP_KINDS, TRIGGERS_BY_POSITION, positionsFor } from '../types.js';
+import type { ActivityMarker, LoopKind } from '../types.js';
 import { isKnownLocation, runChevrotainParse } from '../../common/parser/runChevrotainParse.js';
 
 const listOf = (items: string[]): string =>
@@ -71,11 +73,17 @@ class BpmnParser extends CstParser {
   });
 
   private activity = this.RULE('activity', () => {
+    this.MANY(() => this.CONSUME(t.ActivityMarker));
     this.OPTION(() => this.CONSUME(t.TaskType));
     this.OR([
       { ALT: () => this.CONSUME(t.Task) },
       { ALT: () => this.CONSUME(t.Subprocess) },
-      { ALT: () => this.CONSUME(t.Call) },
+      {
+        ALT: () => {
+          this.CONSUME(t.Call);
+          this.OPTION2(() => this.CONSUME2(t.Subprocess));
+        },
+      },
     ]);
     this.SUBRULE(this.nameAndLabel);
   });
@@ -104,6 +112,7 @@ class BpmnParser extends CstParser {
   private nameAndLabel = this.RULE('nameAndLabel', () => {
     this.OPTION(() => this.CONSUME(t.Identifier));
     this.OPTION2(() => this.CONSUME(t.QuotedString));
+    this.OPTION3(() => this.CONSUME(t.Attributes));
   });
 
   private flow = this.RULE('flow', () => {
@@ -145,6 +154,21 @@ export interface ParsedNode {
   label: string;
   level: number;
   parentId?: string;
+
+  /** An activity's loop marker: a standard loop, or multi-instance in parallel or in sequence. */
+  loop?: LoopKind;
+  /** An activity that compensates another, drawn with the compensation marker. */
+  compensation?: boolean;
+  /** An ad-hoc sub-process, drawn with the tilde marker. */
+  adHoc?: boolean;
+  /** A call activity that calls a process rather than a task, drawn with the `+` marker. */
+  callsProcess?: boolean;
+  /** An exclusive gateway drawn without its `X`. */
+  unmarked?: boolean;
+  /** A data object's state, drawn under its name in brackets. */
+  state?: string;
+  /** A pool that stands for several participants of one kind. */
+  multiple?: boolean;
 }
 
 export interface ParsedFlow {
@@ -199,6 +223,11 @@ const firstTokenOf = (rule: CstNode): IToken | undefined => {
     undefined
   );
 };
+
+/** What was written in an element's `@{ }` block, held until the element knows its own kind. */
+const pendingAttributes = new WeakMap<object, { values: Record<string, unknown>; at?: Location }>();
+/** The markers written in front of an activity keyword, held the same way. */
+const writtenMarkers = new WeakMap<object, IToken[]>();
 
 const remember = (parsed: object, token: IToken | undefined): void => {
   const where = locationOf(token);
@@ -274,6 +303,8 @@ class BpmnVisitor extends BpmnBaseVisitor {
       if (rule) {
         const node = this.visit(rule) as ParsedNode;
         remember(node, firstTokenOf(rule));
+        applyMarkers(node);
+        applyAttributes(node);
         this.baseLevel ??= level;
         node.level = Math.max(0, level - this.baseLevel);
         this.nodes.push(node);
@@ -340,9 +371,16 @@ class BpmnVisitor extends BpmnBaseVisitor {
   }
 
   public activity(ctx: Record<string, CstNode[] | IToken[]>): ParsedNode {
-    const keyword = ctx.Subprocess ? 'subprocess' : ctx.Call ? 'call' : 'task';
+    const keyword = ctx.Call ? 'call' : ctx.Subprocess ? 'subprocess' : 'task';
     const node = this.element(ctx, 'activity', keyword);
     node.qualifier = imageOf((ctx.TaskType as IToken[] | undefined)?.[0]) || undefined;
+    if (keyword === 'call' && ctx.Subprocess) {
+      node.callsProcess = true;
+    }
+    const markers = ctx.ActivityMarker as IToken[] | undefined;
+    if (markers?.length) {
+      writtenMarkers.set(node, markers);
+    }
     return node;
   }
 
@@ -393,10 +431,12 @@ class BpmnVisitor extends BpmnBaseVisitor {
 
   public nameAndLabel(ctx: Record<string, IToken[]>) {
     const quoted = ctx.QuotedString?.[0];
+    const attributes = ctx.Attributes?.[0];
     return {
       id: imageOf(ctx.Identifier?.[0]),
       label: quoted ? quoted.image.slice(1, -1) : '',
       at: locationOf(ctx.Identifier?.[0]),
+      ...(attributes ? { attributes: readAttributes(attributes) } : {}),
     };
   }
 
@@ -440,11 +480,22 @@ class BpmnVisitor extends BpmnBaseVisitor {
       id: string;
       label: string;
       at?: Location;
+      attributes?: { values: Record<string, unknown>; at?: Location };
     };
     if (named.id) {
       this.declare(named.id, named.at);
     }
-    return { kind, keyword, id: named.id, label: named.label || named.id || '', level: 0 };
+    const node: ParsedNode = {
+      kind,
+      keyword,
+      id: named.id,
+      label: named.label || named.id || '',
+      level: 0,
+    };
+    if (named.attributes) {
+      pendingAttributes.set(node, named.attributes);
+    }
+    return node;
   }
 
   private declare(id: string, at?: Location) {
@@ -478,6 +529,168 @@ class BpmnVisitor extends BpmnBaseVisitor {
         node,
         this.nodes.find((candidate) => candidate.id === node.parentId)
       );
+    }
+  }
+}
+
+/** How an element is named in a message: the words its author would recognise. */
+const describe = (node: ParsedNode): string => {
+  switch (node.kind) {
+    case 'event':
+      return `${articleFor(node.keyword)} ${node.keyword} event`;
+    case 'gateway':
+      return `${articleFor(node.keyword)} ${node.keyword} gateway`;
+    case 'data':
+      return node.qualifier ? `a data-${node.qualifier}` : 'a data object';
+    case 'store':
+      return 'a data store';
+    case 'annotation':
+      return 'a note';
+    case 'activity':
+      return node.keyword === 'call' ? 'a call activity' : `a ${node.keyword}`;
+    default:
+      return `a ${node.keyword}`;
+  }
+};
+
+/** Reads the inside of `@{ ... }` as a YAML flow mapping. */
+function readAttributes(token: IToken): { values: Record<string, unknown>; at?: Location } {
+  const at = locationOf(token);
+  let values: unknown;
+  try {
+    values = yaml.load(`{${token.image.slice(2, -1)}}`, { schema: yaml.JSON_SCHEMA });
+  } catch (error) {
+    const reason = error instanceof yaml.YAMLException ? error.reason : String(error);
+    throw new Error(
+      `BPMN error${atText(at)}: the attributes ${token.image} cannot be read (${reason}). Write them as key: value pairs separated by commas.`
+    );
+  }
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    throw new Error(
+      `BPMN error${atText(at)}: the attributes ${token.image} cannot be read. Write them as key: value pairs separated by commas.`
+    );
+  }
+  return { values: values as Record<string, unknown>, at };
+}
+
+const LOOP_MARKERS: Record<string, LoopKind> = {
+  loop: 'standard',
+  parallel: 'parallel',
+  sequential: 'sequential',
+};
+
+/** Markers written in front of the keyword: `loop task`, `parallel subprocess`, `ad-hoc subprocess`. */
+function applyMarkers(node: ParsedNode): void {
+  const markers = writtenMarkers.get(node);
+  if (!markers) {
+    return;
+  }
+  for (const token of markers) {
+    const marker = token.image as ActivityMarker;
+    const where = `BPMN error${atText(locationOf(token))}`;
+    if (marker === 'ad-hoc') {
+      if (node.keyword !== 'subprocess') {
+        throw new Error(
+          `${where}: ad-hoc marks a subprocess, so ${describe(node)} cannot be ad-hoc.`
+        );
+      }
+      if (node.adHoc) {
+        throw new Error(`${where}: ad-hoc is written twice.`);
+      }
+      node.adHoc = true;
+      continue;
+    }
+    if (node.loop) {
+      throw new Error(
+        `${where}: an activity takes one of loop, parallel and sequential, and this one already has a marker. Write only one of them.`
+      );
+    }
+    node.loop = LOOP_MARKERS[marker];
+  }
+}
+
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
+
+/** The row of `ELEMENT_ATTRIBUTES` an element reads its attributes from. */
+const attributeRowOf = (node: ParsedNode): readonly string[] | undefined => {
+  if (node.kind === 'data') {
+    return ELEMENT_ATTRIBUTES.data;
+  }
+  if (node.kind === 'activity' || node.kind === 'pool' || node.keyword === 'xor') {
+    return ELEMENT_ATTRIBUTES[node.keyword as keyof typeof ELEMENT_ATTRIBUTES];
+  }
+  return undefined;
+};
+
+/** Checks an element's `@{ }` block against what that element takes, and records each value. */
+function applyAttributes(node: ParsedNode): void {
+  const written = pendingAttributes.get(node);
+  if (!written) {
+    return;
+  }
+  const where = `BPMN error${atText(written.at)}`;
+  const allowed = attributeRowOf(node);
+  if (!allowed) {
+    throw new Error(`${where}: ${describe(node)} takes no attributes.`);
+  }
+  const wrongValue = (key: string, expected: string, value: unknown) =>
+    new Error(`${where}: ${key} takes ${expected}, not ${JSON.stringify(value)}.`);
+
+  for (const [key, value] of Object.entries(written.values)) {
+    if (!allowed.includes(key)) {
+      throw new Error(
+        `${where}: "${key}" is not an attribute of ${describe(node)}, which takes ${listOf([...allowed])}.`
+      );
+    }
+    switch (key) {
+      case 'loop': {
+        if (node.loop) {
+          throw new Error(
+            `${where}: the loop marker is already written in front of the keyword. Write it once, there or as loop: here.`
+          );
+        }
+        if (value === true) {
+          node.loop = 'standard';
+        } else if (typeof value === 'string' && (LOOP_KINDS as readonly string[]).includes(value)) {
+          node.loop = value as LoopKind;
+        } else if (value !== false) {
+          throw wrongValue(key, `true, ${listOf([...LOOP_KINDS])}`, value);
+        }
+        break;
+      }
+      case 'adhoc':
+        if (!isBoolean(value)) {
+          throw wrongValue(key, 'true or false', value);
+        }
+        if (node.adHoc && value) {
+          throw new Error(
+            `${where}: ad-hoc is already written in front of the keyword. Write it once, there or as adhoc: here.`
+          );
+        }
+        node.adHoc = node.adHoc || value;
+        break;
+      case 'compensation':
+      case 'multiple':
+        if (!isBoolean(value)) {
+          throw wrongValue(key, 'true or false', value);
+        }
+        node[key] = value;
+        break;
+      case 'marker':
+        if (value === false || value === 'none') {
+          node.unmarked = true;
+        } else if (value !== true) {
+          throw wrongValue(key, 'true, false or none', value);
+        }
+        break;
+      case 'state': {
+        const state = typeof value === 'number' ? String(value) : value;
+        if (typeof state !== 'string' || !state.trim() || /[[\]]/.test(state)) {
+          throw wrongValue(key, 'a name without brackets', value);
+        }
+        node.state = state.trim();
+        break;
+      }
     }
   }
 }

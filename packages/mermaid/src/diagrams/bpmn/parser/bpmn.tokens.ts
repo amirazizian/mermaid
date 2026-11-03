@@ -1,6 +1,6 @@
 import { createToken, Lexer } from 'chevrotain';
 import type { CustomPatternMatcherFunc, TokenType } from 'chevrotain';
-import { BPMN_DIRECTIONS, EVENT_TRIGGERS, TASK_TYPES } from '../types.js';
+import { ACTIVITY_MARKERS, BPMN_DIRECTIONS, EVENT_TRIGGERS, TASK_TYPES } from '../types.js';
 
 const asMatch = (image: string, offset: number, text: string): RegExpExecArray => {
   const match = [image] as unknown as RegExpExecArray;
@@ -102,6 +102,16 @@ export const Trigger = createToken({
   pattern: alternation(EVENT_TRIGGERS),
   longer_alt: Identifier,
 });
+/**
+ * An activity marker written in front of the activity keyword: `loop task`,
+ * `parallel task`, `ad-hoc subprocess`. Listed after `Trigger`, so `parallel-multiple`
+ * is still read as a trigger rather than as `parallel` and a stray `-multiple`.
+ */
+export const ActivityMarker = createToken({
+  name: 'ActivityMarker',
+  pattern: alternation(ACTIVITY_MARKERS),
+  longer_alt: Identifier,
+});
 export const TaskType = createToken({
   name: 'TaskType',
   pattern: alternation(TASK_TYPES),
@@ -122,6 +132,12 @@ export const AccDescrMultiline = createToken({
 export const AccDescr = createToken({ name: 'AccDescr', pattern: /accDescr[\t ]*:[^\n\r]*/ });
 
 export const QuotedString = createToken({ name: 'QuotedString', pattern: /"[^\n\r"]*"/ });
+
+/**
+ * A trailing `@{ key: value, ... }` block of element attributes, on one line. Its contents
+ * are read as a YAML flow mapping, the way flowchart, kanban and usecase read theirs.
+ */
+export const Attributes = createToken({ name: 'Attributes', pattern: /@{[^\n\r}]*}/ });
 
 export const LabelledArrow = createToken({
   name: 'LabelledArrow',
@@ -149,6 +165,7 @@ export const bpmnTokens: TokenType[] = [
   AccDescrMultiline,
   AccDescr,
   QuotedString,
+  Attributes,
   Header,
   Direction,
   Pool,
@@ -174,6 +191,7 @@ export const bpmnTokens: TokenType[] = [
   Annotation,
   Group,
   Trigger,
+  ActivityMarker,
   TaskType,
   Identifier,
 ];
