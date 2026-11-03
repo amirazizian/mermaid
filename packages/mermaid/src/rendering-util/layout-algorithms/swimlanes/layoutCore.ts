@@ -66,6 +66,7 @@ export function runSwimlaneLayoutCore(data4Layout: LayoutData): SwimlaneDirectio
     direction,
     spreadByOwnExtent: data4Layout.laneLayering === 'branches',
     gapIsRoomBetween: data4Layout.laneLayering === 'branches',
+    straightenChains: data4Layout.laneLayering === 'branches',
   });
   writeBackToLayoutData(g, ordered, coordinates, { nodeGap, layerGap });
 

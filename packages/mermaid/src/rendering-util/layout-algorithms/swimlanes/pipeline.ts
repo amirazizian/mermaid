@@ -25,6 +25,8 @@ export interface LayoutOptions {
   spreadByOwnExtent?: boolean;
 
   gapIsRoomBetween?: boolean;
+
+  straightenChains?: boolean;
 }
 
 export interface LayoutResult {
@@ -71,6 +73,7 @@ export function sugiyamaLayout(g: Graph, opts?: LayoutOptions): LayoutResult {
     laneOrder,
     spreadByOwnExtent: opts?.spreadByOwnExtent ?? false,
     gapIsRoomBetween: opts?.gapIsRoomBetween ?? false,
+    straightenChains: opts?.straightenChains ?? false,
   });
 
   return {
