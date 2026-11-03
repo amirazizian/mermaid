@@ -3,8 +3,15 @@ import type { CstNode, IToken } from 'chevrotain';
 import * as yaml from 'js-yaml';
 import * as t from './bpmn.tokens.js';
 import { bpmnTokens } from './bpmn.tokens.js';
-import { ELEMENT_ATTRIBUTES, LOOP_KINDS, TRIGGERS_BY_POSITION, positionsFor } from '../types.js';
-import type { ActivityMarker, LoopKind } from '../types.js';
+import {
+  ACTIVITY_MARKERS,
+  CALL_TARGETS,
+  ELEMENT_ATTRIBUTES,
+  LOOP_KINDS,
+  TRIGGERS_BY_POSITION,
+  positionsFor,
+} from '../types.js';
+import type { LoopKind } from '../types.js';
 import { isKnownLocation, runChevrotainParse } from '../../common/parser/runChevrotainParse.js';
 
 const listOf = (items: string[]): string =>
@@ -73,17 +80,11 @@ class BpmnParser extends CstParser {
   });
 
   private activity = this.RULE('activity', () => {
-    this.MANY(() => this.CONSUME(t.ActivityMarker));
     this.OPTION(() => this.CONSUME(t.TaskType));
     this.OR([
       { ALT: () => this.CONSUME(t.Task) },
       { ALT: () => this.CONSUME(t.Subprocess) },
-      {
-        ALT: () => {
-          this.CONSUME(t.Call);
-          this.OPTION2(() => this.CONSUME2(t.Subprocess));
-        },
-      },
+      { ALT: () => this.CONSUME(t.Call) },
     ]);
     this.SUBRULE(this.nameAndLabel);
   });
@@ -155,7 +156,7 @@ export interface ParsedNode {
   level: number;
   parentId?: string;
 
-  /** An activity's loop marker: a standard loop, or multi-instance in parallel or in sequence. */
+  /** How an activity repeats: a standard loop, or multi-instance in parallel or in sequence. */
   loop?: LoopKind;
   /** An activity that compensates another, drawn with the compensation marker. */
   compensation?: boolean;
@@ -226,8 +227,6 @@ const firstTokenOf = (rule: CstNode): IToken | undefined => {
 
 /** What was written in an element's `@{ }` block, held until the element knows its own kind. */
 const pendingAttributes = new WeakMap<object, { values: Record<string, unknown>; at?: Location }>();
-/** The markers written in front of an activity keyword, held the same way. */
-const writtenMarkers = new WeakMap<object, IToken[]>();
 
 const remember = (parsed: object, token: IToken | undefined): void => {
   const where = locationOf(token);
@@ -303,7 +302,6 @@ class BpmnVisitor extends BpmnBaseVisitor {
       if (rule) {
         const node = this.visit(rule) as ParsedNode;
         remember(node, firstTokenOf(rule));
-        applyMarkers(node);
         applyAttributes(node);
         this.baseLevel ??= level;
         node.level = Math.max(0, level - this.baseLevel);
@@ -374,13 +372,6 @@ class BpmnVisitor extends BpmnBaseVisitor {
     const keyword = ctx.Call ? 'call' : ctx.Subprocess ? 'subprocess' : 'task';
     const node = this.element(ctx, 'activity', keyword);
     node.qualifier = imageOf((ctx.TaskType as IToken[] | undefined)?.[0]) || undefined;
-    if (keyword === 'call' && ctx.Subprocess) {
-      node.callsProcess = true;
-    }
-    const markers = ctx.ActivityMarker as IToken[] | undefined;
-    if (markers?.length) {
-      writtenMarkers.set(node, markers);
-    }
     return node;
   }
 
@@ -573,43 +564,45 @@ function readAttributes(token: IToken): { values: Record<string, unknown>; at?: 
   return { values: values as Record<string, unknown>, at };
 }
 
-const LOOP_MARKERS: Record<string, LoopKind> = {
-  loop: 'standard',
-  parallel: 'parallel',
-  sequential: 'sequential',
-};
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
 
-/** Markers written in front of the keyword: `loop task`, `parallel subprocess`, `ad-hoc subprocess`. */
-function applyMarkers(node: ParsedNode): void {
-  const markers = writtenMarkers.get(node);
-  if (!markers) {
-    return;
-  }
-  for (const token of markers) {
-    const marker = token.image as ActivityMarker;
-    const where = `BPMN error${atText(locationOf(token))}`;
-    if (marker === 'ad-hoc') {
+/**
+ * An activity's `marker`: one marker or a list of them, from ACTIVITY_MARKERS. At most one says
+ * how it repeats, `ad-hoc` marks a sub-process only, and none may be named twice.
+ */
+function applyActivityMarkers(node: ParsedNode, value: unknown, where: string): void {
+  const markers = Array.isArray(value) ? value : [value];
+  const known = ACTIVITY_MARKERS as readonly string[];
+  const seen = new Set<string>();
+  for (const marker of markers) {
+    if (typeof marker !== 'string' || !known.includes(marker)) {
+      throw new Error(
+        `${where}: marker takes ${listOf([...known])}, or a list of them, not ${JSON.stringify(marker)}.`
+      );
+    }
+    if (seen.has(marker)) {
+      throw new Error(`${where}: the ${marker} marker is named twice.`);
+    }
+    seen.add(marker);
+    if ((LOOP_KINDS as readonly string[]).includes(marker)) {
+      if (node.loop) {
+        throw new Error(
+          `${where}: an activity takes one of ${listOf([...LOOP_KINDS])}, so ${marker} cannot join ${node.loop}.`
+        );
+      }
+      node.loop = marker as LoopKind;
+    } else if (marker === 'ad-hoc') {
       if (node.keyword !== 'subprocess') {
         throw new Error(
           `${where}: ad-hoc marks a subprocess, so ${describe(node)} cannot be ad-hoc.`
         );
       }
-      if (node.adHoc) {
-        throw new Error(`${where}: ad-hoc is written twice.`);
-      }
       node.adHoc = true;
-      continue;
+    } else {
+      node.compensation = true;
     }
-    if (node.loop) {
-      throw new Error(
-        `${where}: an activity takes one of loop, parallel and sequential, and this one already has a marker. Write only one of them.`
-      );
-    }
-    node.loop = LOOP_MARKERS[marker];
   }
 }
-
-const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
 
 /** The row of `ELEMENT_ATTRIBUTES` an element reads its attributes from. */
 const attributeRowOf = (node: ParsedNode): readonly string[] | undefined => {
@@ -643,41 +636,22 @@ function applyAttributes(node: ParsedNode): void {
       );
     }
     switch (key) {
-      case 'loop': {
-        if (node.loop) {
-          throw new Error(
-            `${where}: the loop marker is already written in front of the keyword. Write it once, there or as loop: here.`
-          );
-        }
-        if (value === true) {
-          node.loop = 'standard';
-        } else if (typeof value === 'string' && (LOOP_KINDS as readonly string[]).includes(value)) {
-          node.loop = value as LoopKind;
-        } else if (value !== false) {
-          throw wrongValue(key, `true, ${listOf([...LOOP_KINDS])}`, value);
-        }
-        break;
-      }
-      case 'adhoc':
-        if (!isBoolean(value)) {
-          throw wrongValue(key, 'true or false', value);
-        }
-        if (node.adHoc && value) {
-          throw new Error(
-            `${where}: ad-hoc is already written in front of the keyword. Write it once, there or as adhoc: here.`
-          );
-        }
-        node.adHoc = node.adHoc || value;
-        break;
-      case 'compensation':
       case 'multiple':
         if (!isBoolean(value)) {
           throw wrongValue(key, 'true or false', value);
         }
-        node[key] = value;
+        node.multiple = value;
+        break;
+      case 'calls':
+        if (typeof value !== 'string' || !(CALL_TARGETS as readonly string[]).includes(value)) {
+          throw wrongValue(key, listOf([...CALL_TARGETS]), value);
+        }
+        node.callsProcess = value === 'process';
         break;
       case 'marker':
-        if (value === false || value === 'none') {
+        if (node.kind === 'activity') {
+          applyActivityMarkers(node, value, where);
+        } else if (value === false || value === 'none') {
           node.unmarked = true;
         } else if (value !== true) {
           throw wrongValue(key, 'true, false or none', value);

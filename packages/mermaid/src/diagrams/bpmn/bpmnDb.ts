@@ -64,7 +64,7 @@ interface Drawn {
 }
 
 const LOOP_GLYPHS = {
-  standard: 'bpmn:loop',
+  loop: 'bpmn:loop',
   parallel: 'bpmn:parallel',
   sequential: 'bpmn:sequential',
 } as const;

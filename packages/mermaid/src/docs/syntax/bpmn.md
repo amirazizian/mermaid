@@ -176,34 +176,34 @@ bpmn-beta LR
 
 ### Activity markers
 
-The markers along an activity's bottom edge are written as a word in front of its keyword.
-`loop` repeats the activity, `parallel` and `sequential` run one instance per item, at once or
-one after another, and `ad-hoc` marks a sub-process whose steps may run in any order. A
-collapsed sub-process always carries its `+`.
+The markers along an activity's bottom edge are written as its `marker` attribute, one
+marker or a list of them. `loop` repeats the activity, `parallel` and `sequential` run one
+instance per item, at once or one after another, `ad-hoc` marks a sub-process whose steps may
+run in any order, and `compensation` marks an activity that undoes another. A collapsed
+sub-process always carries its `+`.
 
 ```mermaid-example
 bpmn-beta LR
   lane "Fulfilment"
-    loop task t1 "Retry payment"
-    parallel user task t2 "Review each item"
-    sequential task t3 "Notify each buyer"
-    ad-hoc subprocess s1 "Research"
-    task t4 "Refund" @{ compensation: true }
+    task t1 "Retry payment" @{ marker: loop }
+    user task t2 "Review each item" @{ marker: parallel }
+    task t3 "Notify each buyer" @{ marker: sequential }
+    subprocess s1 "Research" @{ marker: [ad-hoc, compensation] }
   t1 --> t2 --> t3 --> s1
 ```
 
-Only one of `loop`, `parallel` and `sequential` can be written on an activity, and `ad-hoc`
-only in front of `subprocess`. The compensation marker has no word of its own, because
-`compensation` is already a trigger, so it is written as an attribute.
+An activity takes one of `loop`, `parallel` and `sequential`, and `ad-hoc` marks only a
+`subprocess`. Markers are drawn in the order the notation groups them, whatever order the
+list is written in.
 
-A call activity takes a task type in front of it, for a call to a global task, and is
-followed by `subprocess` when it calls a process, which draws the `+`:
+A call activity takes a task type in front of it, for a call to a global task. One that calls
+a process is written with `calls: process`, which draws the `+`:
 
 ```mermaid-example
 bpmn-beta LR
   lane "Orders"
     user call c1 "Approve with manager"
-    call subprocess c2 "Invoicing"
+    call c2 "Invoicing" @{ calls: process }
   c1 --> c2
 ```
 
@@ -213,14 +213,13 @@ Anything about an element that is not its kind, its id or its label is written i
 `@{ }` block, the same form flowcharts and kanban boards use. The block holds `key: value`
 pairs separated by commas, and an element only accepts the keys listed for it:
 
-| Element                                                | Attribute      | Values                                           |
-| ------------------------------------------------------ | -------------- | ------------------------------------------------ |
-| `task`, `subprocess`, `call`                           | `loop`         | `true`, `standard`, `parallel`, `sequential`     |
-| `task`, `subprocess`, `call`                           | `compensation` | `true` or `false`                                |
-| `subprocess`                                           | `adhoc`        | `true` or `false`                                |
-| `xor`                                                  | `marker`       | `none` or `false` draws it without its X         |
-| `data`, `data-input`, `data-output`, `data-collection` | `state`        | a name, drawn under the label in brackets        |
-| `pool`                                                 | `multiple`     | `true` draws the participant multiplicity marker |
+| Element                                                | Attribute  | Values                                                                                          |
+| ------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------- |
+| `task`, `subprocess`, `call`                           | `marker`   | `loop`, `parallel`, `sequential`, `compensation`, or a list of them; `ad-hoc` on a `subprocess` |
+| `call`                                                 | `calls`    | `task` (the default) or `process`, drawn with a `+`                                             |
+| `xor`                                                  | `marker`   | `none` or `false` draws it without its X                                                        |
+| `data`, `data-input`, `data-output`, `data-collection` | `state`    | a name, drawn under the label in brackets                                                       |
+| `pool`                                                 | `multiple` | `true` draws the participant multiplicity marker                                                |
 
 ```mermaid-example
 bpmn-beta LR

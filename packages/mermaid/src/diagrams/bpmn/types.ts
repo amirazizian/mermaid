@@ -26,20 +26,32 @@ export const TASK_TYPES = [
   'rule',
 ] as const;
 
-/** Markers written in front of an activity keyword; see `ACTIVITY_ATTRIBUTES` for the long form. */
-export const ACTIVITY_MARKERS = ['loop', 'parallel', 'sequential', 'ad-hoc'] as const;
+/**
+ * The markers an activity's `marker` attribute names, drawn along its bottom edge: a standard
+ * loop, multi-instance in parallel or in sequence, ad-hoc (a sub-process only), compensation.
+ */
+export const ACTIVITY_MARKERS = [
+  'loop',
+  'parallel',
+  'sequential',
+  'ad-hoc',
+  'compensation',
+] as const;
 
-/** The values `loop:` takes: a standard loop, or multi-instance run in parallel or in sequence. */
-export const LOOP_KINDS = ['standard', 'parallel', 'sequential'] as const;
+/** The markers that say how an activity repeats, of which it carries at most one. */
+export const LOOP_KINDS = ['loop', 'parallel', 'sequential'] as const;
+
+/** What a call activity calls: a global task (the default) or a process, drawn with a `+`. */
+export const CALL_TARGETS = ['task', 'process'] as const;
 
 /**
  * The attributes each element accepts in its trailing `@{ }` block. An element kind
  * missing from this table takes none, and a key missing from its row is refused.
  */
 export const ELEMENT_ATTRIBUTES = {
-  task: ['loop', 'compensation'],
-  call: ['loop', 'compensation'],
-  subprocess: ['loop', 'compensation', 'adhoc'],
+  task: ['marker'],
+  call: ['marker', 'calls'],
+  subprocess: ['marker'],
   xor: ['marker'],
   data: ['state'],
   pool: ['multiple'],
@@ -103,3 +115,4 @@ export type EventTrigger = (typeof EVENT_TRIGGERS)[number];
 export type TaskType = (typeof TASK_TYPES)[number];
 export type ActivityMarker = (typeof ACTIVITY_MARKERS)[number];
 export type LoopKind = (typeof LOOP_KINDS)[number];
+export type CallTarget = (typeof CALL_TARGETS)[number];

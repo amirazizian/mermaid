@@ -45,7 +45,6 @@ id to anything a flow names.
 An id starts with a letter or `_`, continues with word characters, and may carry internal
 hyphens: `order`, `check_stock`, `step-2`. A keyword cannot be used as an id, so `start`,
 `end`, `data` and `message` are unavailable, while `starter`, `database` and `titles` are fine.
-The activity markers `loop`, `parallel`, `sequential` and `ad-hoc` are keywords too.
 
 A label is always double-quoted, on one line, and cannot itself contain a double quote.
 
@@ -179,8 +178,8 @@ on the gateway itself.
 | `subprocess` | Sub-process                              |
 | `call`       | Call activity, drawn with a thick border |
 
-In front of the keyword, `loop`, `parallel`, `sequential` and `ad-hoc` add the activity's
-marker, and `call subprocess` calls a process, drawn with a `+`. See
+An activity's markers are its `marker` attribute, and a call activity that calls a process
+is written with `calls: process`, drawn with a `+`. See
 [Activity markers](./bpmn.md#activity-markers).
 
 A task takes an optional type in front of it, which selects the glyph in its corner.
@@ -306,12 +305,12 @@ write yet.
 | Sub-process, expanded                                            | Workaround | Draw its steps in a `group`                                             |
 | Call activity                                                    | Supported  | `call c "..."`                                                          |
 | Call activity, calling a global task                             | Supported  | `<type> call c "..."`                                                   |
-| Call activity, calling a process                                 | Supported  | `call subprocess c "..."`                                               |
+| Call activity, calling a process                                 | Supported  | `call c "..." @{ calls: process }`                                      |
 | Transaction                                                      | None       | No syntax; `cancel` is accepted on any `boundary` or `end` in its place |
-| Ad-hoc sub-process                                               | Supported  | `ad-hoc subprocess s "..."`                                             |
-| Loop marker                                                      | Supported  | `loop task t "..."`, or `@{ loop: true }`                               |
-| Multi-instance marker, parallel or sequential                    | Supported  | `parallel task t "..."`, `sequential task t "..."`                      |
-| Compensation marker                                              | Supported  | `task t "..." @{ compensation: true }`                                  |
+| Ad-hoc sub-process                                               | Supported  | `subprocess s "..." @{ marker: ad-hoc }`                                |
+| Loop marker                                                      | Supported  | `task t "..." @{ marker: loop }`                                        |
+| Multi-instance marker, parallel or sequential                    | Supported  | `@{ marker: parallel }`, `@{ marker: sequential }`                      |
+| Compensation marker                                              | Supported  | `task t "..." @{ marker: compensation }`                                |
 
 ### Gateways
 
@@ -398,18 +397,19 @@ BPMN error at line N, column C: a boundary event must be indented under the acti
 ```
 
 **An activity marker that does not fit.** `ad-hoc` only marks a `subprocess`, an activity takes
-one of `loop`, `parallel` and `sequential`, and a marker is written once:
+one of `loop`, `parallel` and `sequential`, and a marker is named once:
 
 ```txt
 BPMN error at line N, column C: ad-hoc marks a subprocess, so a task cannot be ad-hoc.
+BPMN error at line N, column C: an activity takes one of loop, parallel or sequential, so parallel cannot join loop.
 ```
 
 **An attribute the element does not take, or a value it cannot use.** The message names the
 keys the element does take, or the values the key does:
 
 ```txt
-BPMN error at line N, column C: "colour" is not an attribute of a task, which takes loop or compensation.
-BPMN error at line N, column C: loop takes true, standard, parallel or sequential, not "twice".
+BPMN error at line N, column C: "colour" is not an attribute of a task, which takes marker.
+BPMN error at line N, column C: marker takes loop, parallel, sequential, ad-hoc or compensation, or a list of them, not "twice".
 ```
 
 **A flow to an element that is not declared:**

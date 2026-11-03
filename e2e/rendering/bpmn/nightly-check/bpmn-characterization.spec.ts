@@ -213,8 +213,8 @@ title Activity markers
     subprocess sp "Pick and pack"
     user task t "Check the order"
     call ca "Run the credit check"
-    loop task l "Retry payment"
-    parallel ad-hoc subprocess m "Research" @{ compensation: true }
+    task l "Retry payment" @{ marker: loop }
+    subprocess m "Research" @{ marker: [parallel, ad-hoc, compensation] }
       `
     );
 
