@@ -201,27 +201,35 @@ title Direction ${direction}
     });
   }
 
-  test('CHAR.activity-markers should draw no marker the notation puts under an activity', async ({
+  test('CHAR.activity-markers should draw the markers written for an activity along its foot', async ({
     page,
   }, testInfo) => {
     await imgSnapshotTest(
       page,
       testInfo,
       `bpmn-beta LR
-title Activity markers (no syntax for them yet)
+title Activity markers
   lane "Fulfilment"
     subprocess sp "Pick and pack"
     user task t "Check the order"
     call ca "Run the credit check"
+    loop task l "Retry payment"
+    parallel ad-hoc subprocess m "Research" @{ compensation: true }
       `
     );
 
     const svg = diagramSvg(page);
-    // BPMN puts a loop, a multi-instance, a compensation or an ad-hoc marker along the
-    // foot of an activity. None can be asked for, so none is drawn.
-    await expect(svg.locator('.bpmn-marker')).toHaveCount(0);
-    // What an activity does draw is the icon for its own kind, in its top left.
-    await expect(svg.locator('.bpmn-activity-icon')).toHaveCount(2);
+    const markersOf = (id: string) =>
+      svg.locator(`g.node[id$="-${id}"] .bpmn-activity-markers > g`);
+    // BPMN groups the loop or multi-instance, the collapsed sub-process +, ad-hoc and
+    // compensation markers along the foot of an activity, and draws only those it has.
+    await expect(markersOf('sp')).toHaveCount(1);
+    await expect(markersOf('l')).toHaveCount(1);
+    await expect(markersOf('m')).toHaveCount(4);
+    await expect(markersOf('t')).toHaveCount(0);
+    await expect(markersOf('ca')).toHaveCount(0);
+    // The task type is the icon in the top left, so only the user task has one.
+    await expect(svg.locator('.bpmn-activity-icon')).toHaveCount(1);
     // A call activity is marked by a thick border instead of an icon.
     await expect(svg.locator('g.node.bpmn-call')).toHaveCount(1);
   });
@@ -398,9 +406,16 @@ title Activity colours, ${name}
       });
       expect(painted).not.toBeNull();
       // The retuned pair is the one the frontmatter asked for; the default pair is
-      // whatever the theme supplies, and the two must not be the same.
-      expect(painted!.fill).toBe(name === 'retuned' ? 'rgb(255, 232, 204)' : 'rgb(234, 242, 251)');
-      expect(painted!.stroke).toBe(name === 'retuned' ? 'rgb(217, 72, 15)' : 'rgb(62, 111, 168)');
+      // whatever the theme supplies, and the two must not be the same. An activity is
+      // filled with the theme's primaryColor, #ECECFF in the default theme.
+      if (name === 'retuned') {
+        expect(painted!.fill).toBe('rgb(255, 232, 204)');
+        expect(painted!.stroke).toBe('rgb(217, 72, 15)');
+      } else {
+        expect(painted!.fill).toBe('rgb(236, 236, 255)');
+        expect(painted!.fill).not.toBe('rgb(255, 232, 204)');
+        expect(painted!.stroke).not.toBe('rgb(217, 72, 15)');
+      }
     });
   }
 
