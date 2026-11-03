@@ -45,6 +45,14 @@ export interface CoordOptions {
 
   gapIsRoomBetween?: boolean;
   laneOrder?: string[];
+
+  /**
+   * Straighten one-to-one chains: where a node's only successor in its lane is that
+   * successor's only predecessor, move one of the two onto the other's line when it
+   * still clears its neighbours and stays in its lane. A fork or a merge keeps its
+   * centred place, so only a run of flow that could be straight is made straight.
+   */
+  straightenChains?: boolean;
 }
 
 /** A labelled edge within one rank: its label sits in the target's row. */
@@ -369,6 +377,24 @@ export function assignCoordinates(
     yOffset += layerH + gapSize;
   }
 
+  if (opts?.straightenChains) {
+    straightenChains({
+      layers,
+      edges: gWithDummies.edges,
+      x,
+      laneOf: topLaneOf,
+      extentOf: (id) => (topLaneOf(id) === null ? getWidth(id) : crossExtent(id)),
+      reachBefore,
+      reachAfter,
+      nodeGap,
+      laneBounds: (L) => {
+        const axis = laneAxis.get(L) ?? 0;
+        const half = laneHalves.get(L) ?? { left: 0, right: 0 };
+        return [axis - half.left, axis + half.right];
+      },
+    });
+  }
+
   // A row label goes beyond the row's nodes in its lane, on the side the edge comes
   // in from; several on one side stack outward in the order they were declared.
   const rowEdge = new Map<string, number>();
@@ -456,4 +482,90 @@ export function assignCoordinates(
   }
 
   return { x, y };
+}
+
+interface StraightenInput {
+  layers: NodeId[][];
+  edges: { src: NodeId; dst: NodeId }[];
+  x: Record<NodeId, number>;
+  laneOf: (id: NodeId) => string | null;
+  extentOf: (id: NodeId) => number;
+  reachBefore: (id: NodeId) => number;
+  reachAfter: (id: NodeId) => number;
+  nodeGap: number;
+  laneBounds: (lane: string | null) => [number, number];
+}
+
+/** Moves nodes of one-to-one chains onto a shared line where their rank leaves room. */
+function straightenChains(input: StraightenInput): void {
+  const { layers, edges, x, laneOf, extentOf, reachBefore, reachAfter, nodeGap, laneBounds } =
+    input;
+  const successors = new Map<NodeId, NodeId[]>();
+  const predecessors = new Map<NodeId, NodeId[]>();
+  for (const { src, dst } of edges) {
+    successors.set(src, [...(successors.get(src) ?? []), dst]);
+    predecessors.set(dst, [...(predecessors.get(dst) ?? []), src]);
+  }
+  const layerOf = new Map<NodeId, number>();
+  for (const [index, layer] of layers.entries()) {
+    for (const id of layer) {
+      layerOf.set(id, index);
+    }
+  }
+  const chainNext = (id: NodeId): NodeId | undefined => {
+    const next = successors.get(id);
+    if (next?.length !== 1) {
+      return undefined;
+    }
+    const [to] = next;
+    return predecessors.get(to)?.length === 1 &&
+      laneOf(to) === laneOf(id) &&
+      layerOf.get(to) === (layerOf.get(id) ?? -2) + 1
+      ? to
+      : undefined;
+  };
+  const chainPrevious = (id: NodeId): NodeId | undefined => {
+    const previous = predecessors.get(id);
+    return previous?.length === 1 && chainNext(previous[0]) === id ? previous[0] : undefined;
+  };
+
+  /** Whether `id` fits at `at` beside the other nodes of its rank and inside its lane. */
+  const fits = (id: NodeId, at: number): boolean => {
+    const lane = laneOf(id);
+    const low = at - extentOf(id) / 2 - reachBefore(id);
+    const high = at + extentOf(id) / 2 + reachAfter(id);
+    const [laneLow, laneHigh] = laneBounds(lane);
+    if (low < laneLow - 0.5 || high > laneHigh + 0.5) {
+      return false;
+    }
+    const layer = layers[layerOf.get(id) ?? -1] ?? [];
+    return layer.every((other) => {
+      if (other === id || laneOf(other) !== lane) {
+        return true;
+      }
+      const otherLow = x[other] - extentOf(other) / 2 - reachBefore(other);
+      const otherHigh = x[other] + extentOf(other) / 2 + reachAfter(other);
+      // Neither may jump over the other, which would undo the rank's order.
+      const keepsOrder = x[other] < x[id] ? otherHigh + nodeGap <= low : high + nodeGap <= otherLow;
+      return keepsOrder;
+    });
+  };
+
+  const align = (id: NodeId, to: NodeId | undefined): void => {
+    if (to !== undefined && Math.abs(x[id] - x[to]) > 0.5 && fits(id, x[to])) {
+      x[id] = x[to];
+    }
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    for (const layer of layers) {
+      for (const id of layer) {
+        align(id, chainPrevious(id));
+      }
+    }
+    for (const layer of [...layers].reverse()) {
+      for (const id of layer) {
+        align(id, chainNext(id));
+      }
+    }
+  }
 }

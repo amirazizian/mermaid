@@ -42,13 +42,13 @@ export const bpmnIcons: IconifyJSON = {
       body: '<circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.7"/><path fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" d="M4.5 21a7.5 7.5 0 0 1 15 0"/>',
     },
     service: {
-      body: '<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" d="m20.2 14.3-2 .6a6.6 6.6 0 0 1-1 1.7l.6 2-2.4 1.4-1.5-1.5a6.6 6.6 0 0 1-2 0l-1.5 1.5-2.4-1.4.6-2a6.6 6.6 0 0 1-1-1.7l-2-.6v-2.8l2-.6a6.6 6.6 0 0 1 1-1.7l-.6-2 2.4-1.4 1.5 1.5a6.6 6.6 0 0 1 2 0l1.5-1.5 2.4 1.4-.6 2a6.6 6.6 0 0 1 1 1.7l2 .6z"/><circle cx="12" cy="12.9" r="2.6" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+      body: '<path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" d="M10.52 5.57 L10.59 3.11 L13.41 3.11 L13.48 5.57 L15.5 6.4 L17.29 4.72 L19.28 6.71 L17.6 8.5 L18.43 10.52 L20.89 10.59 L20.89 13.41 L18.43 13.48 L17.6 15.5 L19.28 17.29 L17.29 19.28 L15.5 17.6 L13.48 18.43 L13.41 20.89 L10.59 20.89 L10.52 18.43 L8.5 17.6 L6.71 19.28 L4.72 17.29 L6.4 15.5 L5.57 13.48 L3.11 13.41 L3.11 10.59 L5.57 10.52 L6.4 8.5 L4.72 6.71 L6.71 4.72 L8.5 6.4Z"/><circle cx="12" cy="12" r="2.8" fill="none" stroke="currentColor" stroke-width="1.5"/>',
     },
     script: {
-      body: '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M8 3h9a2.5 2.5 0 0 0-2.5 2.5v13A2.5 2.5 0 0 1 12 21H3a2.5 2.5 0 0 0 2.5-2.5v-13A2.5 2.5 0 0 1 8 3Z"/><path stroke="currentColor" stroke-width="1.4" stroke-linecap="round" d="M6.5 8h6M6.5 11.5h6M6.5 15h4"/>',
+      body: '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M7.5 3.5H18c-2 2.4-2 5.1 0 8.5s2 6.1 0 8.5H7.5c2-2.4 2-5.1 0-8.5s-2-6.1 0-8.5Z"/><path stroke="currentColor" stroke-width="1.4" stroke-linecap="round" d="M9.5 8h6M10.8 12h6M9.5 16h6"/>',
     },
     manual: {
-      body: '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M8 11V5.5a1.8 1.8 0 0 1 3.5 0V10m0-.5a1.8 1.8 0 0 1 3.5 0V11m0-.5a1.8 1.8 0 0 1 3.5 0V16a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5v-4.5a1.8 1.8 0 0 1 1.5-1.8z"/>',
+      body: '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" d="M7 14V6.5a1.5 1.5 0 0 1 3 0V11V4.5a1.5 1.5 0 0 1 3 0V11V5.5a1.5 1.5 0 0 1 3 0V11.5V7.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1a6 6 0 0 1-5-2.7L3.6 15.4a1.6 1.6 0 0 1 2.5-1.9L7 14.6"/>',
     },
     receive: {
       body: '<path fill="none" stroke="currentColor" stroke-width="1.6" d="M3 6h18v12H3z"/><path fill="none" stroke="currentColor" stroke-width="1.6" d="m3 6 9 7 9-7"/>',
