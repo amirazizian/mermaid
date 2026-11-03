@@ -450,9 +450,94 @@ function stubToHost(node: Node, host: Node, pin: AnchorPin): { x: number; y: num
   return path;
 }
 
+/** Room between neighbouring entry points on a host's border (px). */
+const ENTRY_SPACING = 12;
+
+const sizeAcross = (node: Node, alongX: boolean) => {
+  const drawn = node.metadata?.drawnExtent as { width?: unknown; height?: unknown } | undefined;
+  const value = alongX ? drawn?.height : drawn?.width;
+  return isFiniteNumber(value) && value > 0 ? value : sizeAlong(node, !alongX);
+};
+
+interface Stub {
+  edge: NonNullable<LayoutData['edges']>[number];
+  node: Node;
+  host: Node;
+  pin: AnchorPin;
+}
+
+/**
+ * The lines from the nodes pinned beside one side of a host, laid out together so they
+ * cannot cross. A node in front of the host's side goes straight in. Those beyond either
+ * end of the side enter it at their own points, outermost first from that end, and turn
+ * at their own depth, the outermost nearest the host: each line then runs outside the
+ * ones within it, as nested L shapes do.
+ */
+function stubsBesideOneSide(stubs: Stub[]): Map<Stub, { x: number; y: number }[]> {
+  const paths = new Map<Stub, { x: number; y: number }[]>();
+  const { host, pin } = stubs[0];
+  const alongX = pin.side === 'top' || pin.side === 'bottom';
+  const hAlong = alongX ? host.x! : host.y!;
+  const hAcross = alongX ? host.y! : host.x!;
+  const reach = Math.max(0, sizeAlong(host, alongX) / 2 - BORDER_INSET);
+  const low = hAlong - reach;
+  const high = hAlong + reach;
+  const outward = pin.side === 'bottom' || pin.side === 'right' ? 1 : -1;
+  const hostFace = hAcross + (outward * sizeAcross(host, alongX)) / 2;
+
+  const placed = stubs.map((stub) => {
+    const nAlong = alongX ? stub.node.x! : stub.node.y!;
+    const nAcross = alongX ? stub.node.y! : stub.node.x!;
+    const nodeFace = nAcross - (outward * sizeAcross(stub.node, alongX)) / 2;
+    return { stub, nAlong, nAcross, nodeFace };
+  });
+  // Less than a unit off the side still reads as straight, landing on its end.
+  const isAbreast = ({ nAlong }: (typeof placed)[number]) =>
+    Math.abs(clamp(nAlong, low, high) - nAlong) < 1;
+  const straight = placed.filter(isAbreast);
+  const before = placed
+    .filter((entry) => !isAbreast(entry) && entry.nAlong < low)
+    .sort((a, b) => a.nAlong - b.nAlong);
+  const after = placed
+    .filter((entry) => !isAbreast(entry) && entry.nAlong > high)
+    .sort((a, b) => b.nAlong - a.nAlong);
+
+  for (const { stub, nAlong, nAcross } of straight) {
+    paths.set(stub, [
+      pointAt(alongX, nAlong, nAcross),
+      pointAt(alongX, clamp(nAlong, low, high), hAcross),
+    ]);
+  }
+  const firstStraight = Math.min(...straight.map(({ nAlong }) => nAlong), high);
+  const lastStraight = Math.max(...straight.map(({ nAlong }) => nAlong), low);
+
+  const nest = (run: typeof placed, start: number, room: number, step: 1 | -1) => {
+    const spacing = run.length > 1 ? Math.min(ENTRY_SPACING, room / run.length) : 0;
+    for (const [k, { stub, nAlong, nAcross, nodeFace }] of run.entries()) {
+      const enter = start + step * k * spacing;
+      // A line on its own turns halfway between the two centres; lines that share the run
+      // turn at even steps across the gap between the two borders, so each keeps its own.
+      const turn =
+        run.length === 1
+          ? (nAcross + hAcross) / 2
+          : hostFace + ((k + 1) * (nodeFace - hostFace)) / (run.length + 1);
+      paths.set(stub, [
+        pointAt(alongX, nAlong, nAcross),
+        pointAt(alongX, nAlong, turn),
+        pointAt(alongX, enter, turn),
+        pointAt(alongX, enter, hAcross),
+      ]);
+    }
+  };
+  nest(before, low, Math.max(0, firstStraight - low - ENTRY_SPACING), 1);
+  nest(after, high, Math.max(0, high - lastStraight - ENTRY_SPACING), -1);
+  return paths;
+}
+
 export function squareAnchoredEdges(layout: LayoutData, pins: AnchorPin[]): void {
   const byId = new Map((layout.nodes ?? []).map((node) => [node.id, node]));
   const pinById = new Map(pins.map((pin) => [pin.nodeId, pin]));
+  const bySide = new Map<string, Stub[]>();
   for (const edge of layout.edges ?? []) {
     const start = typeof edge.start === 'string' ? edge.start : undefined;
     const end = typeof edge.end === 'string' ? edge.end : undefined;
@@ -468,9 +553,24 @@ export function squareAnchoredEdges(layout: LayoutData, pins: AnchorPin[]): void
     }
     const node = byId.get(pin.nodeId);
     const host = byId.get(pin.hostId);
-    const path = node && host ? stubToHost(node, host, pin) : null;
-    if (path) {
-      edge.points = pin.nodeId === start ? path : [...path].reverse();
+    if (!node || !host || !canRoute(node, host)) {
+      continue;
+    }
+    const alongX = pin.side === 'top' || pin.side === 'bottom';
+    // A node that leaves sideways (a text annotation's bracket) keeps its own stub.
+    if (leavesSideways(attachFaceOf(node), alongX)) {
+      const path = stubToHost(node, host, pin);
+      if (path) {
+        edge.points = pin.nodeId === start ? path : [...path].reverse();
+      }
+      continue;
+    }
+    const key = `${pin.hostId}\u0000${pin.side}`;
+    bySide.set(key, [...(bySide.get(key) ?? []), { edge, node, host, pin }]);
+  }
+  for (const stubs of bySide.values()) {
+    for (const [stub, path] of stubsBesideOneSide(stubs)) {
+      stub.edge.points = stub.pin.nodeId === stub.edge.start ? path : [...path].reverse();
     }
   }
 }
