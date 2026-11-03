@@ -1,6 +1,7 @@
 /** Setup arrow head and define the marker. The result is appended to the svg. */
 import { log } from '../../logger.js';
 import * as configApi from '../../config.js';
+import { markerOffsets } from '../../utils/lineWithOffset.js';
 
 // Only add the number of markers that the diagram needs
 const insertMarkers = (elem, markerArray, type, id) => {
@@ -993,20 +994,30 @@ const hierarchy = (elem, type, id) => {
     .style('fill', 'none');
 };
 
-const openArrow = (elem, type, id) => {
+// A line with one of these markers is drawn `markerOffsets` short of the shape it meets (4 for
+// the open head, 8 for the ring) in every look, so each marker reaches back across that gap:
+// the head's tip and the ring's outer edge touch the shape, as BPMN draws a message flow.
+const OPEN_ARROW_GAP = markerOffsets.arrow_open_head;
+const HOLLOW_CIRCLE_GAP = markerOffsets.arrow_hollow_circle;
+// The ring's outer edge: its radius plus half its stroke, around the centre at 5.
+const RING_NEAR = 5 - 3.6 - 0.7;
+const RING_FAR = 5 + 3.6 + 0.7;
+
+const openArrowMarker = (elem, id, cls, refX, d) =>
   elem
     .append('marker')
-    .attr('id', id + '_' + type + '-openArrowEnd')
-    .attr('class', 'marker openArrow ' + type)
+    .attr('id', id)
+    .attr('class', cls)
     .attr('viewBox', '0 0 12 12')
-    .attr('refX', 11)
+    .attr('refX', refX)
     .attr('refY', 6)
     .attr('markerUnits', 'userSpaceOnUse')
     .attr('markerWidth', 12)
     .attr('markerHeight', 12)
     .attr('orient', 'auto')
+    .attr('overflow', 'visible')
     .append('path')
-    .attr('d', 'M 1 1 L 11 6 L 1 11')
+    .attr('d', d)
     .attr('class', 'arrowMarkerPath')
     .style('stroke-width', 1.4)
     .style('stroke-linecap', 'round')
@@ -1014,39 +1025,29 @@ const openArrow = (elem, type, id) => {
     .style('stroke-dasharray', '1,0')
     .style('fill', 'none');
 
-  elem
-    .append('marker')
-    .attr('id', id + '_' + type + '-openArrowStart')
-    .attr('class', 'marker openArrow ' + type)
-    .attr('viewBox', '0 0 12 12')
-    .attr('refX', 1)
-    .attr('refY', 6)
-    .attr('markerUnits', 'userSpaceOnUse')
-    .attr('markerWidth', 12)
-    .attr('markerHeight', 12)
-    .attr('orient', 'auto')
-    .append('path')
-    .attr('d', 'M 11 1 L 1 6 L 11 11')
-    .attr('class', 'arrowMarkerPath')
-    .style('stroke-width', 1.4)
-    .style('stroke-linecap', 'round')
-    .style('stroke-linejoin', 'round')
-    .style('stroke-dasharray', '1,0')
-    .style('fill', 'none');
+const openArrow = (elem, type, id) => {
+  const cls = 'marker openArrow ' + type;
+  const end = 'M 1 1 L 11 6 L 1 11';
+  const start = 'M 11 1 L 1 6 L 11 11';
+  const base = id + '_' + type + '-openArrow';
+  // The tip is at 11 on the way out and at 1 on the way in.
+  openArrowMarker(elem, base + 'End', cls, 11 - OPEN_ARROW_GAP, end);
+  openArrowMarker(elem, base + 'Start', cls, 1 + OPEN_ARROW_GAP, start);
 };
 
-const hollowCircle = (elem, type, id) => {
+const hollowCircleMarker = (elem, id, cls, refX) =>
   elem
     .append('marker')
-    .attr('id', id + '_' + type + '-hollowCircleStart')
-    .attr('class', 'marker hollowCircle ' + type)
+    .attr('id', id)
+    .attr('class', cls)
     .attr('viewBox', '0 0 10 10')
-    .attr('refX', 0)
+    .attr('refX', refX)
     .attr('refY', 5)
     .attr('markerUnits', 'userSpaceOnUse')
     .attr('markerWidth', 10)
     .attr('markerHeight', 10)
     .attr('orient', 'auto')
+    .attr('overflow', 'visible')
     .append('circle')
     .attr('cx', 5)
     .attr('cy', 5)
@@ -1056,25 +1057,12 @@ const hollowCircle = (elem, type, id) => {
     .style('stroke-dasharray', '1,0')
     .style('fill', 'none');
 
-  elem
-    .append('marker')
-    .attr('id', id + '_' + type + '-hollowCircleEnd')
-    .attr('class', 'marker hollowCircle ' + type)
-    .attr('viewBox', '0 0 10 10')
-    .attr('refX', 10)
-    .attr('refY', 5)
-    .attr('markerUnits', 'userSpaceOnUse')
-    .attr('markerWidth', 10)
-    .attr('markerHeight', 10)
-    .attr('orient', 'auto')
-    .append('circle')
-    .attr('cx', 5)
-    .attr('cy', 5)
-    .attr('r', 3.6)
-    .attr('class', 'arrowMarkerPath')
-    .style('stroke-width', 1.4)
-    .style('stroke-dasharray', '1,0')
-    .style('fill', 'none');
+const hollowCircle = (elem, type, id) => {
+  const cls = 'marker hollowCircle ' + type;
+  const base = id + '_' + type + '-hollowCircle';
+  // The ring's near edge touches the shape the line leaves, and its far edge the line.
+  hollowCircleMarker(elem, base + 'Start', cls, RING_NEAR + HOLLOW_CIRCLE_GAP);
+  hollowCircleMarker(elem, base + 'End', cls, RING_FAR - HOLLOW_CIRCLE_GAP);
 };
 
 // TODO rename the class diagram markers to something shape descriptive and semantic free
