@@ -73,6 +73,10 @@ task "Check stock"        %% generated id, label "Check stock"
 
 An id is only needed when a flow refers to the element.
 
+The label of an event, a gateway, a data object or a data store is written under its shape.
+When a flow would run through it, the label moves to the first free place around the shape:
+above it, beside it, or at one of its corners. It stays under the shape when no place is free.
+
 ## Pools and lanes
 
 A `pool` is a participant in the process; a `lane` divides a pool into roles. Both are containers, so their contents are indented under them. A diagram may use lanes without a pool.
