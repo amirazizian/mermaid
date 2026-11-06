@@ -60,7 +60,25 @@ const ARTIFACT_CLEARANCE = 18;
 interface Drawn {
   shape: BpmnShape;
   icon?: string;
+  markers?: string[];
 }
+
+const LOOP_GLYPHS = {
+  loop: 'bpmn:loop',
+  parallel: 'bpmn:parallel',
+  sequential: 'bpmn:sequential',
+} as const;
+
+/**
+ * The markers along an activity's bottom edge, in the order BPMN 2.0.2 groups them: the loop or
+ * multi-instance marker, the `+` of a collapsed sub-process, ad-hoc, then compensation.
+ */
+const activityMarkers = (node: ParsedNode): string[] => [
+  ...(node.loop ? [LOOP_GLYPHS[node.loop]] : []),
+  ...(node.keyword === 'subprocess' || node.callsProcess ? ['bpmn:subprocess'] : []),
+  ...(node.adHoc ? ['bpmn:ad-hoc'] : []),
+  ...(node.compensation ? ['bpmn:compensation'] : []),
+];
 
 const drawnAs = (node: ParsedNode): Drawn => {
   const qualifier = node.qualifier && node.qualifier !== 'none' ? node.qualifier : undefined;
@@ -71,12 +89,17 @@ const drawnAs = (node: ParsedNode): Drawn => {
         ...(qualifier ? { icon: `bpmn:${qualifier}` } : {}),
       };
     case 'gateway':
-      return { shape: 'bpmn-gateway', icon: GATEWAY_GLYPHS[node.keyword] ?? 'bpmn:exclusive' };
-    case 'activity':
-      if (node.keyword === 'subprocess') {
-        return { shape: 'bpmn-activity', icon: 'bpmn:subprocess' };
-      }
-      return { shape: 'bpmn-activity', ...(qualifier ? { icon: `bpmn:${qualifier}` } : {}) };
+      return node.unmarked
+        ? { shape: 'bpmn-gateway' }
+        : { shape: 'bpmn-gateway', icon: GATEWAY_GLYPHS[node.keyword] ?? 'bpmn:exclusive' };
+    case 'activity': {
+      const markers = activityMarkers(node);
+      return {
+        shape: 'bpmn-activity',
+        ...(qualifier && node.keyword !== 'subprocess' ? { icon: `bpmn:${qualifier}` } : {}),
+        ...(markers.length ? { markers } : {}),
+      };
+    }
     case 'data':
       return { shape: 'bpmn-data' };
     case 'store':
@@ -181,14 +204,18 @@ export class BpmnDb {
         this.parsed.nodes.find((n) => n.id === artifactHost)?.kind === 'gateway';
       const isBand = parsed.kind === 'pool' || parsed.kind === 'lane';
       const isGroup = isBand || parsed.kind === 'group';
-      const { shape, icon } = drawnAs(parsed);
+      const { shape, icon, markers } = drawnAs(parsed);
       const shared = {
         id: parsed.id,
-        label: parsed.label,
+        label: parsed.state ? `${parsed.label}<br>[${parsed.state}]` : parsed.label,
         labelType: 'string' as const,
         parentId: parsed.parentId,
         metadata: {
           ...(isBand ? { laneRole: parsed.kind, laneIndex: laneIndex++ } : {}),
+          ...(parsed.multiple ? { multiplicity: true } : {}),
+          // The state is drawn in the label, and kept here too for anything that reads the
+          // diagram's elements rather than its drawing.
+          ...(parsed.state ? { state: parsed.state } : {}),
           ...(parsed.keyword === 'boundary' && parsed.parentId
             ? { anchorTo: { hostId: parsed.parentId } }
             : {}),
@@ -212,6 +239,7 @@ export class BpmnDb {
           ...(isGroup ? [`bpmn-${parsed.kind}`] : []),
           ...(parsed.keyword === 'end' || parsed.keyword === 'throw' ? ['bpmn-throw'] : []),
           ...(parsed.keyword === 'call' ? ['bpmn-call'] : []),
+          ...(parsed.compensation ? ['bpmn-compensation'] : []),
         ].join(' '),
         cssStyles: [],
         padding: parsed.kind === 'group' ? 56 : 20,
@@ -220,7 +248,14 @@ export class BpmnDb {
       if (isGroup) {
         nodes.push({ ...shared, isGroup: true, shape: isBand ? 'rect' : 'roundedWithTitle' });
       } else {
-        nodes.push({ ...shared, isGroup: false, shape, ...(icon ? { icon } : {}) });
+        const node: NonClusterNode & { markers?: string[] } = {
+          ...shared,
+          isGroup: false,
+          shape,
+          ...(icon ? { icon } : {}),
+          ...(markers ? { markers } : {}),
+        };
+        nodes.push(node);
       }
     }
 

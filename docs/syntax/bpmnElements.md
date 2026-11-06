@@ -23,8 +23,8 @@ The trigger, task-type and configuration tables on these pages are generated fro
 
 ## Writing an element
 
-Every element follows one shape: an optional modifier, the keyword, an optional id, and an
-optional quoted label.
+Every element follows one shape: an optional modifier, the keyword, an optional id, an
+optional quoted label, and an optional block of attributes.
 
 ```txt
 user task approve "Approve the order"
@@ -34,6 +34,9 @@ user task approve "Approve the order"
  |    keyword
  modifier
 ```
+
+Attributes are written last, as `@{ key: value }`; see [Attributes](./bpmn.md#attributes) for
+the keys each element takes.
 
 Both the id and the label are optional, and their order is fixed. An element with only a
 label gets an id of its own - `task-1`, `xor-2` - which nothing else can refer to, so give an
@@ -175,6 +178,10 @@ on the gateway itself.
 | `subprocess` | Sub-process                              |
 | `call`       | Call activity, drawn with a thick border |
 
+An activity's markers are its `marker` attribute, and a call activity that calls a process
+is written with `calls: process`, drawn with a `+`. See
+[Activity markers](./bpmn.md#activity-markers).
+
 A task takes an optional type in front of it, which selects the glyph in its corner.
 
 | **Written**    | **Notation**       |
@@ -297,23 +304,25 @@ write yet.
 | Sub-process, collapsed                                           | Supported  | `subprocess sp "..."`                                                   |
 | Sub-process, expanded                                            | Workaround | Draw its steps in a `group`                                             |
 | Call activity                                                    | Supported  | `call c "..."`                                                          |
+| Call activity, calling a global task                             | Supported  | `<type> call c "..."`                                                   |
+| Call activity, calling a process                                 | Supported  | `call c "..." @{ calls: process }`                                      |
 | Transaction                                                      | None       | No syntax; `cancel` is accepted on any `boundary` or `end` in its place |
-| Ad-hoc sub-process                                               | None       | -                                                                       |
-| Loop marker                                                      | None       | The glyph exists but nothing can ask for it                             |
-| Multi-instance marker, parallel or sequential                    | None       | As above                                                                |
-| Compensation marker                                              | None       | As above                                                                |
+| Ad-hoc sub-process                                               | Supported  | `subprocess s "..." @{ marker: ad-hoc }`                                |
+| Loop marker                                                      | Supported  | `task t "..." @{ marker: loop }`                                        |
+| Multi-instance marker, parallel or sequential                    | Supported  | `@{ marker: parallel }`, `@{ marker: sequential }`                      |
+| Compensation marker                                              | Supported  | `task t "..." @{ marker: compensation }`                                |
 
 ### Gateways
 
-| Element                                 | Status    | Written                        |
-| --------------------------------------- | --------- | ------------------------------ |
-| Exclusive gateway                       | Supported | `xor g "..."`                  |
-| Parallel gateway                        | Supported | `and g "..."`                  |
-| Inclusive gateway                       | Supported | `or g "..."`                   |
-| Event-based gateway                     | Supported | `event-gateway g "..."`        |
-| Complex gateway                         | Supported | `complex g "..."`              |
-| Exclusive gateway without its marker    | None      | Both are drawn with the marker |
-| Parallel or exclusive event-based start | None      | -                              |
+| Element                                 | Status    | Written                         |
+| --------------------------------------- | --------- | ------------------------------- |
+| Exclusive gateway                       | Supported | `xor g "..."`                   |
+| Parallel gateway                        | Supported | `and g "..."`                   |
+| Inclusive gateway                       | Supported | `or g "..."`                    |
+| Event-based gateway                     | Supported | `event-gateway g "..."`         |
+| Complex gateway                         | Supported | `complex g "..."`               |
+| Exclusive gateway without its marker    | Supported | `xor g "..." @{ marker: none }` |
+| Parallel or exclusive event-based start | None      | -                               |
 
 ### Flows and data
 
@@ -326,19 +335,21 @@ write yet.
 | Association                 | Supported  | `a ..> b`, `a ... b`                                  |
 | Data association            | Supported  | An association to or from a data artifact             |
 | Data object, and collection | Supported  | `data`, `data-collection`                             |
+| Data object state           | Supported  | `data d "..." @{ state: approved }`                   |
 | Data input, and output      | Supported  | `data-input`, `data-output`                           |
 | Data store                  | Supported  | `data-store`                                          |
 
 ### Swimlanes and artifacts
 
-| Element              | Status    | Written                            |
-| -------------------- | --------- | ---------------------------------- |
-| Pool, participant    | Supported | `pool p "..."`                     |
-| Pool, black box      | Supported | `pool p "..."` with nothing inside |
-| Lane                 | Supported | `lane l "..."`                     |
-| Text annotation      | Supported | `note n "..."`                     |
-| Group                | Supported | `group g "..."`, within one lane   |
-| Group spanning pools | None      | A group is held by one lane        |
+| Element                  | Status    | Written                            |
+| ------------------------ | --------- | ---------------------------------- |
+| Pool, participant        | Supported | `pool p "..."`                     |
+| Pool, black box          | Supported | `pool p "..."` with nothing inside |
+| Participant multiplicity | Supported | `pool p "..." @{ multiple: true }` |
+| Lane                     | Supported | `lane l "..."`                     |
+| Text annotation          | Supported | `note n "..."`                     |
+| Group                    | Supported | `group g "..."`, within one lane   |
+| Group spanning pools     | None      | A group is held by one lane        |
 
 ### Other diagram types
 
@@ -347,9 +358,10 @@ has syntax here.
 
 ## What the parser refuses
 
-Reading stops at the first error, and the diagram is replaced by the error diagram. There are
-seven kinds. Every message names the line and the column of the statement it refuses, except
-that a lexing error also lists the character range. The line is a line of what you wrote: front
+Only one error is reported, the one written first, and the diagram is replaced by the error
+diagram. There are ten kinds. Every message names the line and the column of the statement it
+refuses, or of the attribute key it refuses, except that a lexing error also lists the
+character range. The line is a line of what you wrote: front
 matter, directives and `%%` comments written before the diagram are counted. The character range
 is counted in the text the parser reads, which has no front matter and no directives.
 
@@ -385,6 +397,33 @@ BPMN error at line N, column C: a task cannot be indented under the task "a", be
 BPMN error at line N, column C: a boundary event must be indented under the activity it is attached to.
 ```
 
+**An activity marker that does not fit.** `ad-hoc` only marks a `subprocess`, an activity takes
+one of `loop`, `parallel` and `sequential`, and a marker is named once:
+
+```txt
+BPMN error at line N, column C: ad-hoc marks a subprocess, so a task cannot be ad-hoc.
+BPMN error at line N, column C: an activity takes one of loop, parallel or sequential, so parallel cannot join loop.
+```
+
+**An attribute the element does not take, or a value it cannot use.** The message names the
+keys the element does take, or the values the key does:
+
+```txt
+BPMN error at line N, column C: "colour" is not an attribute of a task, which takes marker.
+BPMN error at line N, column C: marker takes loop, parallel, sequential, ad-hoc or compensation, or a list of them, not "twice".
+BPMN error at line N, column C: a user call calls a global user task, so it cannot call a process. Drop user to call a process, or calls: process to call the task.
+```
+
+The column is that of the key the message is about.
+
+**An attribute block that is not closed on its line.** An element's attributes are written on
+its own line, between `@{` and `}`; a `}` inside a quoted value does not close the block:
+
+```txt
+BPMN error at line N, column C: the attributes block opened here is never closed. Close it with } on the same line.
+BPMN error at line N, column C: the attributes block opened here runs on to the next line. Write an element's attributes on its own line, between @{ and }.
+```
+
 **A flow to an element that is not declared:**
 
 ```txt
@@ -403,8 +442,6 @@ rather than as a message:
 
 Worth knowing before you reach for them:
 
-- **Activity markers** - loop, multi-instance, ad-hoc and compensation. The glyphs are drawn
-  and the renderer will place them, but nothing in the grammar can ask for one.
 - **Non-interrupting boundary events**, which the notation draws with a dashed ring.
 - **Event sub-processes and transactions**, whose absence is why two rows of the trigger
   matrix are wider than the notation.

@@ -1,8 +1,17 @@
 import { CstParser, Lexer } from 'chevrotain';
 import type { CstNode, IToken } from 'chevrotain';
+import * as yaml from 'js-yaml';
 import * as t from './bpmn.tokens.js';
 import { bpmnTokens } from './bpmn.tokens.js';
-import { TRIGGERS_BY_POSITION, positionsFor } from '../types.js';
+import {
+  ACTIVITY_MARKERS,
+  CALL_TARGETS,
+  ELEMENT_ATTRIBUTES,
+  LOOP_KINDS,
+  TRIGGERS_BY_POSITION,
+  positionsFor,
+} from '../types.js';
+import type { LoopKind } from '../types.js';
 import { isKnownLocation, runChevrotainParse } from '../../common/parser/runChevrotainParse.js';
 
 const listOf = (items: string[]): string =>
@@ -104,6 +113,7 @@ class BpmnParser extends CstParser {
   private nameAndLabel = this.RULE('nameAndLabel', () => {
     this.OPTION(() => this.CONSUME(t.Identifier));
     this.OPTION2(() => this.CONSUME(t.QuotedString));
+    this.OPTION3(() => this.CONSUME(t.Attributes));
   });
 
   private flow = this.RULE('flow', () => {
@@ -145,6 +155,21 @@ export interface ParsedNode {
   label: string;
   level: number;
   parentId?: string;
+
+  /** How an activity repeats: a standard loop, or multi-instance in parallel or in sequence. */
+  loop?: LoopKind;
+  /** An activity that compensates another, drawn with the compensation marker. */
+  compensation?: boolean;
+  /** An ad-hoc sub-process, drawn with the tilde marker. */
+  adHoc?: boolean;
+  /** A call activity that calls a process rather than a task, drawn with the `+` marker. */
+  callsProcess?: boolean;
+  /** An exclusive gateway drawn without its `X`. */
+  unmarked?: boolean;
+  /** A data object's state, drawn under its name in brackets. */
+  state?: string;
+  /** A pool that stands for several participants of one kind. */
+  multiple?: boolean;
 }
 
 export interface ParsedFlow {
@@ -200,6 +225,16 @@ const firstTokenOf = (rule: CstNode): IToken | undefined => {
   );
 };
 
+/** What was written in an element's `@{ }` block: its values, where it starts, and its text. */
+interface WrittenAttributes {
+  values: Record<string, unknown>;
+  at?: Location;
+  image: string;
+}
+
+/** What was written in an element's `@{ }` block, held until the element knows its own kind. */
+const pendingAttributes = new WeakMap<object, WrittenAttributes>();
+
 const remember = (parsed: object, token: IToken | undefined): void => {
   const where = locationOf(token);
   if (where) {
@@ -220,6 +255,8 @@ class BpmnVisitor extends BpmnBaseVisitor {
   private declared = new Set<string>();
 
   private baseLevel: number | undefined;
+  /** The errors found while reading, each with where its statement starts. */
+  private problems: { at?: Location; error: unknown }[] = [];
 
   constructor() {
     super();
@@ -236,6 +273,33 @@ class BpmnVisitor extends BpmnBaseVisitor {
     this.generated = 0;
     this.declared = new Set();
     this.baseLevel = undefined;
+    this.problems = [];
+  }
+
+  /**
+   * Runs `check` and keeps what it throws instead of stopping, so that once every statement
+   * has been read the error written first in the source is the one reported.
+   */
+  private attempt<T>(at: Location | undefined, check: () => T): T | undefined {
+    try {
+      return check();
+    } catch (error) {
+      this.problems.push({ at, error });
+      return undefined;
+    }
+  }
+
+  /** Throws the error written first in the source, if any was found. */
+  private throwFirstProblem(): void {
+    const rank = (at?: Location) => (at ? [at.line, at.column] : [Infinity, Infinity]);
+    const [first] = [...this.problems].sort((a, b) => {
+      const [lineA, columnA] = rank(a.at);
+      const [lineB, columnB] = rank(b.at);
+      return lineA - lineB || columnA - columnB;
+    });
+    if (first) {
+      throw first.error;
+    }
   }
 
   public result(): ParsedDiagram {
@@ -259,6 +323,12 @@ class BpmnVisitor extends BpmnBaseVisitor {
     }
     this.assignGeneratedIds();
     this.assignParents();
+    for (const flow of this.flows) {
+      this.attempt(written.get(flow), () =>
+        assertFlowRefersToDeclaredElements(flow, this.declared)
+      );
+    }
+    this.throwFirstProblem();
   }
 
   public line(ctx: Record<string, CstNode[] | IToken[]>) {
@@ -272,8 +342,13 @@ class BpmnVisitor extends BpmnBaseVisitor {
     for (const key of ['container', 'event', 'gateway', 'activity', 'artifact'] as const) {
       const rule = (ctx[key] as CstNode[] | undefined)?.[0];
       if (rule) {
-        const node = this.visit(rule) as ParsedNode;
+        const at = locationOf(firstTokenOf(rule));
+        const node = this.attempt(at, () => this.visit(rule) as ParsedNode);
+        if (!node) {
+          return;
+        }
         remember(node, firstTokenOf(rule));
+        this.attempt(at, () => applyAttributes(node));
         this.baseLevel ??= level;
         node.level = Math.max(0, level - this.baseLevel);
         this.nodes.push(node);
@@ -393,10 +468,12 @@ class BpmnVisitor extends BpmnBaseVisitor {
 
   public nameAndLabel(ctx: Record<string, IToken[]>) {
     const quoted = ctx.QuotedString?.[0];
+    const attributes = ctx.Attributes?.[0];
     return {
       id: imageOf(ctx.Identifier?.[0]),
       label: quoted ? quoted.image.slice(1, -1) : '',
       at: locationOf(ctx.Identifier?.[0]),
+      ...(attributes ? { attributes: readAttributes(attributes) } : {}),
     };
   }
 
@@ -440,11 +517,22 @@ class BpmnVisitor extends BpmnBaseVisitor {
       id: string;
       label: string;
       at?: Location;
+      attributes?: WrittenAttributes;
     };
     if (named.id) {
       this.declare(named.id, named.at);
     }
-    return { kind, keyword, id: named.id, label: named.label || named.id || '', level: 0 };
+    const node: ParsedNode = {
+      kind,
+      keyword,
+      id: named.id,
+      label: named.label || named.id || '',
+      level: 0,
+    };
+    if (named.attributes) {
+      pendingAttributes.set(node, named.attributes);
+    }
+    return node;
   }
 
   private declare(id: string, at?: Location) {
@@ -474,10 +562,191 @@ class BpmnVisitor extends BpmnBaseVisitor {
           break;
         }
       }
-      assertPlaced(
-        node,
-        this.nodes.find((candidate) => candidate.id === node.parentId)
+      this.attempt(written.get(node), () =>
+        assertPlaced(
+          node,
+          this.nodes.find((candidate) => candidate.id === node.parentId)
+        )
       );
+    }
+  }
+}
+
+/** How an element is named in a message: the words its author would recognise. */
+const describe = (node: ParsedNode): string => {
+  switch (node.kind) {
+    case 'event':
+      return `${articleFor(node.keyword)} ${node.keyword} event`;
+    case 'gateway':
+      return `${articleFor(node.keyword)} ${node.keyword} gateway`;
+    case 'data':
+      return node.qualifier ? `a data-${node.qualifier}` : 'a data object';
+    case 'store':
+      return 'a data store';
+    case 'annotation':
+      return 'a note';
+    case 'activity':
+      return node.keyword === 'call' ? 'a call activity' : `a ${node.keyword}`;
+    default:
+      return `a ${node.keyword}`;
+  }
+};
+
+/** Reads the inside of `@{ ... }` as a YAML flow mapping. */
+function readAttributes(token: IToken): WrittenAttributes {
+  const at = locationOf(token);
+  const opened = `BPMN error${atText(at)}: the attributes block opened here`;
+  if (!token.image.endsWith('}')) {
+    throw new Error(`${opened} is never closed. Close it with } on the same line.`);
+  }
+  if (LINE_BREAK.test(token.image)) {
+    throw new Error(
+      `${opened} runs on to the next line. Write an element's attributes on its own line, between @{ and }.`
+    );
+  }
+  let values: unknown;
+  try {
+    values = yaml.load(`{${token.image.slice(2, -1)}}`, { schema: yaml.JSON_SCHEMA });
+  } catch (error) {
+    const reason = error instanceof yaml.YAMLException ? error.reason : String(error);
+    throw new Error(
+      `BPMN error${atText(at)}: the attributes ${token.image} cannot be read (${reason}). Write them as key: value pairs separated by commas.`
+    );
+  }
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    throw new Error(
+      `BPMN error${atText(at)}: the attributes ${token.image} cannot be read. Write them as key: value pairs separated by commas.`
+    );
+  }
+  return { values: values as Record<string, unknown>, at, image: token.image };
+}
+
+const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
+
+/**
+ * An activity's `marker`: one marker or a list of them, from ACTIVITY_MARKERS. At most one says
+ * how it repeats, `ad-hoc` marks a sub-process only, and none may be named twice.
+ */
+function applyActivityMarkers(node: ParsedNode, value: unknown, where: string): void {
+  const markers = Array.isArray(value) ? value : [value];
+  const known = ACTIVITY_MARKERS as readonly string[];
+  if (markers.length === 0) {
+    throw new Error(
+      `${where}: marker takes ${listOf([...known])}, or a list of them, not an empty list. Leave marker out for an activity without markers.`
+    );
+  }
+  const seen = new Set<string>();
+  for (const marker of markers) {
+    if (typeof marker !== 'string' || !known.includes(marker)) {
+      throw new Error(
+        `${where}: marker takes ${listOf([...known])}, or a list of them, not ${JSON.stringify(marker)}.`
+      );
+    }
+    if (seen.has(marker)) {
+      throw new Error(`${where}: the ${marker} marker is named twice.`);
+    }
+    seen.add(marker);
+    if ((LOOP_KINDS as readonly string[]).includes(marker)) {
+      if (node.loop) {
+        throw new Error(
+          `${where}: an activity takes one of ${listOf([...LOOP_KINDS])}, so ${marker} cannot join ${node.loop}.`
+        );
+      }
+      node.loop = marker as LoopKind;
+    } else if (marker === 'ad-hoc') {
+      if (node.keyword !== 'subprocess') {
+        throw new Error(
+          `${where}: ad-hoc marks a subprocess, so ${describe(node)} cannot be ad-hoc.`
+        );
+      }
+      node.adHoc = true;
+    } else {
+      node.compensation = true;
+    }
+  }
+}
+
+/** The row of `ELEMENT_ATTRIBUTES` an element reads its attributes from. */
+const attributeRowOf = (node: ParsedNode): readonly string[] | undefined => {
+  if (node.kind === 'data') {
+    return ELEMENT_ATTRIBUTES.data;
+  }
+  if (node.kind === 'activity' || node.kind === 'pool' || node.keyword === 'xor') {
+    return ELEMENT_ATTRIBUTES[node.keyword as keyof typeof ELEMENT_ATTRIBUTES];
+  }
+  return undefined;
+};
+
+/**
+ * Where `key` is written inside an element's `@{ }` block, so an error about it points at the
+ * key rather than at the `@{` that opens the block.
+ */
+function keyLocation(written: WrittenAttributes, key: string): Location | undefined {
+  if (!written.at) {
+    return undefined;
+  }
+  const escaped = key.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&');
+  const found = new RegExp(`([{,]\\s*)["']?${escaped}["']?\\s*:`).exec(written.image);
+  return found
+    ? { line: written.at.line, column: written.at.column + found.index + found[1].length }
+    : written.at;
+}
+
+/** Checks an element's `@{ }` block against what that element takes, and records each value. */
+function applyAttributes(node: ParsedNode): void {
+  const written = pendingAttributes.get(node);
+  if (!written) {
+    return;
+  }
+  const allowed = attributeRowOf(node);
+  if (!allowed) {
+    throw new Error(`BPMN error${atText(written.at)}: ${describe(node)} takes no attributes.`);
+  }
+
+  for (const [key, value] of Object.entries(written.values)) {
+    const where = `BPMN error${atText(keyLocation(written, key))}`;
+    const wrongValue = (expected: string) =>
+      new Error(`${where}: ${key} takes ${expected}, not ${JSON.stringify(value)}.`);
+    if (!allowed.includes(key)) {
+      throw new Error(
+        `${where}: "${key}" is not an attribute of ${describe(node)}, which takes ${listOf([...allowed])}.`
+      );
+    }
+    switch (key) {
+      case 'multiple':
+        if (!isBoolean(value)) {
+          throw wrongValue('true or false');
+        }
+        node.multiple = value;
+        break;
+      case 'calls':
+        if (typeof value !== 'string' || !(CALL_TARGETS as readonly string[]).includes(value)) {
+          throw wrongValue(listOf([...CALL_TARGETS]));
+        }
+        if (value === 'process' && node.qualifier) {
+          throw new Error(
+            `${where}: a ${node.qualifier} call calls a global ${node.qualifier} task, so it cannot call a process. Drop ${node.qualifier} to call a process, or calls: process to call the task.`
+          );
+        }
+        node.callsProcess = value === 'process';
+        break;
+      case 'marker':
+        if (node.kind === 'activity') {
+          applyActivityMarkers(node, value, where);
+        } else if (value === 'none') {
+          node.unmarked = true;
+        } else {
+          throw wrongValue('none');
+        }
+        break;
+      case 'state': {
+        const state = typeof value === 'number' ? String(value) : value;
+        if (typeof state !== 'string' || !state.trim() || /[[\]]/.test(state)) {
+          throw wrongValue('a name without brackets');
+        }
+        node.state = state.trim();
+        break;
+      }
     }
   }
 }
@@ -515,15 +784,12 @@ const arrowOf = (flow: ParsedFlow): string => {
 };
 
 /** A flow end that names no declared element has nothing to attach to, so it is refused here. */
-function assertFlowsReferToDeclaredElements({ nodes, flows }: ParsedDiagram): void {
-  const declared = new Set(nodes.map((node) => node.id));
-  for (const flow of flows) {
-    for (const id of [flow.from, flow.to]) {
-      if (!declared.has(id)) {
-        throw new Error(
-          `BPMN error${atText(written.get(flow))}: the flow "${flow.from} ${arrowOf(flow)} ${flow.to}" refers to "${id}", which is not declared. Declare it as an element before using it.`
-        );
-      }
+function assertFlowRefersToDeclaredElements(flow: ParsedFlow, declared: ReadonlySet<string>): void {
+  for (const id of [flow.from, flow.to]) {
+    if (!declared.has(id)) {
+      throw new Error(
+        `BPMN error${atText(written.get(flow))}: the flow "${flow.from} ${arrowOf(flow)} ${flow.to}" refers to "${id}", which is not declared. Declare it as an element before using it.`
+      );
     }
   }
 }
@@ -557,7 +823,6 @@ export function parseBpmn(input: string, precedingLines = 0): ParsedDiagram {
         visit: (cst) => {
           visitor.reset();
           visitor.visit(cst);
-          assertFlowsReferToDeclaredElements(visitor.result());
         },
         lineOffset: precedingLines,
       },
