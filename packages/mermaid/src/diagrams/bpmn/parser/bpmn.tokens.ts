@@ -123,6 +123,20 @@ export const AccDescr = createToken({ name: 'AccDescr', pattern: /accDescr[\t ]*
 
 export const QuotedString = createToken({ name: 'QuotedString', pattern: /"[^\n\r"]*"/ });
 
+/**
+ * A trailing `@{ key: value, ... }` block of element attributes, on one line. Its contents
+ * are read as a YAML flow mapping, the way flowchart, kanban and usecase read theirs.
+ *
+ * A `}` inside a quoted value does not close the block. The token also takes a block that
+ * runs on to another line or is never closed, so the parser can refuse it with a BPMN error
+ * that names where it opened, instead of a lexing error about the characters after it.
+ */
+export const Attributes = createToken({
+  name: 'Attributes',
+  pattern: /@{(?:"[^\n\r"]*"|'[^\n\r']*'|[^}])*}?/,
+  line_breaks: true,
+});
+
 export const LabelledArrow = createToken({
   name: 'LabelledArrow',
   pattern: /--(?![>-])[^\n\r]*?--+>/,
@@ -149,6 +163,7 @@ export const bpmnTokens: TokenType[] = [
   AccDescrMultiline,
   AccDescr,
   QuotedString,
+  Attributes,
   Header,
   Direction,
   Pool,

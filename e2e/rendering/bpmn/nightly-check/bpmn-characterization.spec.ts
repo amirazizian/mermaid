@@ -201,27 +201,35 @@ title Direction ${direction}
     });
   }
 
-  test('CHAR.activity-markers should draw no marker the notation puts under an activity', async ({
+  test('CHAR.activity-markers should draw the markers written for an activity along its foot', async ({
     page,
   }, testInfo) => {
     await imgSnapshotTest(
       page,
       testInfo,
       `bpmn-beta LR
-title Activity markers (no syntax for them yet)
+title Activity markers
   lane "Fulfilment"
     subprocess sp "Pick and pack"
     user task t "Check the order"
     call ca "Run the credit check"
+    task l "Retry payment" @{ marker: loop }
+    subprocess m "Research" @{ marker: [parallel, ad-hoc, compensation] }
       `
     );
 
     const svg = diagramSvg(page);
-    // BPMN puts a loop, a multi-instance, a compensation or an ad-hoc marker along the
-    // foot of an activity. None can be asked for, so none is drawn.
-    await expect(svg.locator('.bpmn-marker')).toHaveCount(0);
-    // What an activity does draw is the icon for its own kind, in its top left.
-    await expect(svg.locator('.bpmn-activity-icon')).toHaveCount(2);
+    const markersOf = (id: string) =>
+      svg.locator(`g.node[id$="-${id}"] .bpmn-activity-markers > g`);
+    // BPMN groups the loop or multi-instance, the collapsed sub-process +, ad-hoc and
+    // compensation markers along the foot of an activity, and draws only those it has.
+    await expect(markersOf('sp')).toHaveCount(1);
+    await expect(markersOf('l')).toHaveCount(1);
+    await expect(markersOf('m')).toHaveCount(4);
+    await expect(markersOf('t')).toHaveCount(0);
+    await expect(markersOf('ca')).toHaveCount(0);
+    // The task type is the icon in the top left, so only the user task has one.
+    await expect(svg.locator('.bpmn-activity-icon')).toHaveCount(1);
     // A call activity is marked by a thick border instead of an icon.
     await expect(svg.locator('g.node.bpmn-call')).toHaveCount(1);
   });

@@ -1,0 +1,14 @@
+bpmn-beta LR
+title Activity markers
+  lane "Markers"
+    task t1 "Retry payment" @{ marker: loop }
+    user task t2 "Review each item" @{ marker: parallel }
+    task t3 "Notify each buyer" @{ marker: sequential }
+    task t4 "Refund" @{ marker: compensation }
+    subprocess s1 "Pack goods"
+    subprocess s2 "Research" @{ marker: ad-hoc }
+    subprocess s3 "Ship each parcel" @{ marker: [parallel, compensation] }
+    user call c1 "Approve with manager"
+    call c2 "Invoicing" @{ calls: process }
+  t1 --> t2 --> t3 --> t4
+  s1 --> s2 --> s3 --> c1 --> c2
