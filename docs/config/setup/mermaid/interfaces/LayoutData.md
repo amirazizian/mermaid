@@ -10,7 +10,7 @@
 
 # Interface: LayoutData
 
-Defined in: [packages/mermaid/src/rendering-util/types.ts:244](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L244)
+Defined in: [packages/mermaid/src/rendering-util/types.ts:255](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L255)
 
 ## Indexable
 
@@ -22,7 +22,7 @@ Defined in: [packages/mermaid/src/rendering-util/types.ts:244](https://github.co
 
 > **config**: [`MermaidConfig`](MermaidConfig.md)
 
-Defined in: [packages/mermaid/src/rendering-util/types.ts:247](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L247)
+Defined in: [packages/mermaid/src/rendering-util/types.ts:258](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L258)
 
 ---
 
@@ -30,7 +30,7 @@ Defined in: [packages/mermaid/src/rendering-util/types.ts:247](https://github.co
 
 > `optional` **diagramId**: `string`
 
-Defined in: [packages/mermaid/src/rendering-util/types.ts:248](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L248)
+Defined in: [packages/mermaid/src/rendering-util/types.ts:259](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L259)
 
 ---
 
@@ -38,7 +38,7 @@ Defined in: [packages/mermaid/src/rendering-util/types.ts:248](https://github.co
 
 > **edges**: `Edge`\[]
 
-Defined in: [packages/mermaid/src/rendering-util/types.ts:246](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L246)
+Defined in: [packages/mermaid/src/rendering-util/types.ts:257](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L257)
 
 ---
 
@@ -46,7 +46,7 @@ Defined in: [packages/mermaid/src/rendering-util/types.ts:246](https://github.co
 
 > `optional` **laneLayering**: `"branches"`
 
-Defined in: [packages/mermaid/src/rendering-util/types.ts:250](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L250)
+Defined in: [packages/mermaid/src/rendering-util/types.ts:261](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L261)
 
 `branches` asks a swimlane layout to layer each branch of the flow on its own.
 
@@ -56,4 +56,4 @@ Defined in: [packages/mermaid/src/rendering-util/types.ts:250](https://github.co
 
 > **nodes**: `Node`\[]
 
-Defined in: [packages/mermaid/src/rendering-util/types.ts:245](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L245)
+Defined in: [packages/mermaid/src/rendering-util/types.ts:256](https://github.com/mermaid-js/mermaid/blob/master/packages/mermaid/src/rendering-util/types.ts#L256)
