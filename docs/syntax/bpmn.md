@@ -317,7 +317,7 @@ pairs separated by commas, and an element only accepts the keys listed for it:
 | `task`, `subprocess`, `call`                           | `marker`   | `loop`, `parallel`, `sequential`, `compensation`, or a list of them; `ad-hoc` on a `subprocess` |
 | `call`                                                 | `calls`    | `task` (the default) or `process`, drawn with a `+`                                             |
 | `xor`                                                  | `marker`   | `none` draws it without its X                                                                   |
-| `data`, `data-input`, `data-output`, `data-collection` | `state`    | a name, drawn under the label in brackets                                                       |
+| `data`, `data-input`, `data-output`, `data-collection` | `state`    | a name, drawn in brackets under the label, or alone without one                                 |
 | `pool`                                                 | `multiple` | `true` draws the participant multiplicity marker                                                |
 
 ```mermaid

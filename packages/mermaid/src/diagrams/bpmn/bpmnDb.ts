@@ -102,6 +102,14 @@ const activityMarkers = (node: ParsedNode): string[] => [
   ...(node.compensation ? ['bpmn:compensation'] : []),
 ];
 
+/** The label drawn on an element: a data object's state goes under its name, or alone without one. */
+const drawnLabel = ({ label, state }: ParsedNode): string => {
+  if (!state) {
+    return label;
+  }
+  return label ? `${label}<br>[${state}]` : `[${state}]`;
+};
+
 const drawnAs = (node: ParsedNode): Drawn => {
   const qualifier = node.qualifier && node.qualifier !== 'none' ? node.qualifier : undefined;
   switch (node.kind) {
@@ -230,7 +238,7 @@ export class BpmnDb {
       const { shape, icon, markers } = drawnAs(parsed);
       const shared = {
         id: parsed.id,
-        label: parsed.state ? `${parsed.label}<br>[${parsed.state}]` : parsed.label,
+        label: drawnLabel(parsed),
         labelType: 'string' as const,
         parentId: parsed.parentId,
         metadata: {

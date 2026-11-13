@@ -127,14 +127,16 @@ export const QuotedString = createToken({ name: 'QuotedString', pattern: /"[^\n\
  * A trailing `@{ key: value, ... }` block of element attributes, on one line. Its contents
  * are read as a YAML flow mapping, the way flowchart, kanban and usecase read theirs.
  *
- * A `}` inside a quoted value does not close the block. The token also takes a block that
- * runs on to another line or is never closed, so the parser can refuse it with a BPMN error
- * that names where it opened, instead of a lexing error about the characters after it.
+ * A `}` inside a quoted value does not close the block, and a quoted value may hold an escaped
+ * quote (`\"` or `\'`). The token stops at the end of its line, closed or not, so the parser can
+ * refuse an unclosed block with a BPMN error that names where it opened, before anything
+ * written after it. Inside a quoted part a character is read one way only (an escape or a plain
+ * character), so a quote that is not closed is given up on in one pass and the pattern does not
+ * backtrack exponentially.
  */
 export const Attributes = createToken({
   name: 'Attributes',
-  pattern: /@{(?:"[^\n\r"]*"|'[^\n\r']*'|[^}])*}?/,
-  line_breaks: true,
+  pattern: /@{(?:"(?:[^\n\r"\\]|\\[^\n\r])*"|'(?:[^\n\r'\\]|\\[^\n\r])*'|[^\n\r}])*}?/,
 });
 
 export const LabelledArrow = createToken({

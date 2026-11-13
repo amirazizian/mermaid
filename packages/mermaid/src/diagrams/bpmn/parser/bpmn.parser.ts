@@ -225,9 +225,19 @@ const firstTokenOf = (rule: CstNode): IToken | undefined => {
   );
 };
 
-/** What was written in an element's `@{ }` block: its values, where it starts, and its text. */
+/** A key of an element's `@{ }` block, and where in the block's text it is written. */
+interface WrittenKey {
+  key: string;
+  offset: number;
+}
+
+/**
+ * What was written in an element's `@{ }` block: its values, its keys in the order they are
+ * written, where it starts, and its text.
+ */
 interface WrittenAttributes {
   values: Record<string, unknown>;
+  keys: WrittenKey[];
   at?: Location;
   image: string;
 }
@@ -592,18 +602,71 @@ const describe = (node: ParsedNode): string => {
   }
 };
 
+/** Where the quoted text that opens at `start` ends, just after its closing quote. */
+function quotedEnd(text: string, start: number): number {
+  const quote = text[start];
+  let index = start + 1;
+  while (index < text.length && text[index] !== quote) {
+    index += text[index] === '\\' ? 2 : 1;
+  }
+  return Math.min(index + 1, text.length);
+}
+
+/** A key as YAML reads it, so that `"2"`, `'2'` and `2` all name the key `2`. */
+function keyName(written: string): string {
+  try {
+    const read: unknown = yaml.load(written, { schema: yaml.JSON_SCHEMA });
+    if (typeof read === 'string') {
+      return read;
+    }
+    return typeof read === 'number' || typeof read === 'boolean' || read === null
+      ? String(read)
+      : written;
+  } catch {
+    return written;
+  }
+}
+
+/**
+ * The keys written at the top of an element's `@{ }` block, in the order they are written.
+ * Quoted text is skipped whole, so a `key:` inside a quoted value is not taken for a key.
+ */
+function writtenKeys(image: string): WrittenKey[] {
+  const keys: WrittenKey[] = [];
+  let depth = 0;
+  let expectingKey = true;
+  for (let index = 2; index < image.length; index++) {
+    const char = image[index];
+    if (char === '"' || char === "'") {
+      const end = quotedEnd(image, index);
+      if (expectingKey && depth === 0) {
+        keys.push({ key: keyName(image.slice(index, end)), offset: index });
+        expectingKey = false;
+      }
+      index = end - 1;
+    } else if (char === '[' || char === '{') {
+      depth++;
+      expectingKey = false;
+    } else if (char === ']' || char === '}') {
+      depth--;
+    } else if (char === ',' && depth === 0) {
+      expectingKey = true;
+    } else if (expectingKey && depth === 0 && !/\s/.test(char)) {
+      let end = index;
+      while (end < image.length && !/[,:}]/.test(image[end])) {
+        end++;
+      }
+      keys.push({ key: keyName(image.slice(index, end).trim()), offset: index });
+      expectingKey = false;
+      index = end - 1;
+    }
+  }
+  return keys;
+}
+
 /** Reads the inside of `@{ ... }` as a YAML flow mapping. */
 function readAttributes(token: IToken): WrittenAttributes {
   const at = locationOf(token);
-  const opened = `BPMN error${atText(at)}: the attributes block opened here`;
-  if (!token.image.endsWith('}')) {
-    throw new Error(`${opened} is never closed. Close it with } on the same line.`);
-  }
-  if (LINE_BREAK.test(token.image)) {
-    throw new Error(
-      `${opened} runs on to the next line. Write an element's attributes on its own line, between @{ and }.`
-    );
-  }
   let values: unknown;
   try {
     values = yaml.load(`{${token.image.slice(2, -1)}}`, { schema: yaml.JSON_SCHEMA });
@@ -618,7 +681,12 @@ function readAttributes(token: IToken): WrittenAttributes {
       `BPMN error${atText(at)}: the attributes ${token.image} cannot be read. Write them as key: value pairs separated by commas.`
     );
   }
-  return { values: values as Record<string, unknown>, at, image: token.image };
+  return {
+    values: values as Record<string, unknown>,
+    keys: writtenKeys(token.image),
+    at,
+    image: token.image,
+  };
 }
 
 const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
@@ -685,11 +753,21 @@ function keyLocation(written: WrittenAttributes, key: string): Location | undefi
   if (!written.at) {
     return undefined;
   }
-  const escaped = key.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&');
-  const found = new RegExp(`([{,]\\s*)["']?${escaped}["']?\\s*:`).exec(written.image);
-  return found
-    ? { line: written.at.line, column: written.at.column + found.index + found[1].length }
-    : written.at;
+  const found = written.keys.find((entry) => entry.key === key);
+  return found ? { line: written.at.line, column: written.at.column + found.offset } : written.at;
+}
+
+/** An element's attributes in the order they are written, not the order `Object.entries` gives. */
+function entriesInWrittenOrder(written: WrittenAttributes): [string, unknown][] {
+  const keys = [...new Set(written.keys.map((entry) => entry.key))].filter((key) =>
+    Object.hasOwn(written.values, key)
+  );
+  for (const key of Object.keys(written.values)) {
+    if (!keys.includes(key)) {
+      keys.push(key);
+    }
+  }
+  return keys.map((key) => [key, written.values[key]]);
 }
 
 /** Checks an element's `@{ }` block against what that element takes, and records each value. */
@@ -703,7 +781,7 @@ function applyAttributes(node: ParsedNode): void {
     throw new Error(`BPMN error${atText(written.at)}: ${describe(node)} takes no attributes.`);
   }
 
-  for (const [key, value] of Object.entries(written.values)) {
+  for (const [key, value] of entriesInWrittenOrder(written)) {
     const where = `BPMN error${atText(keyLocation(written, key))}`;
     const wrongValue = (expected: string) =>
       new Error(`${where}: ${key} takes ${expected}, not ${JSON.stringify(value)}.`);
@@ -806,6 +884,34 @@ function syntaxErrorLocation(input: string, token: IToken): Location {
   return { line: lines.length + lineOffset, column: lines[lines.length - 1].length + 1 };
 }
 
+/** The first `@{` block that is not closed on its own line, if any. */
+function firstUnclosedBlock(input: string): IToken | undefined {
+  if (!input.includes('@{')) {
+    return undefined;
+  }
+  return bpmnLexer
+    .tokenize(input)
+    .tokens.find((token) => token.tokenType === t.Attributes && !token.image.endsWith('}'));
+}
+
+/**
+ * The error for a block that is not closed on its line. It runs on to the next line when that
+ * line closes it, before opening a block of its own; otherwise it is never closed.
+ */
+function unclosedBlockError(input: string, block: IToken): Error {
+  const opened = `BPMN error${atText(locationOf(block))}: the attributes block opened here`;
+  const nextLine = input
+    .slice(block.startOffset + block.image.length)
+    .replace(/^(\r\n|\r|\n)/, '')
+    .split(LINE_BREAK)[0];
+  if (nextLine.split('@{')[0].includes('}')) {
+    return new Error(
+      `${opened} runs on to the next line. Write an element's attributes on its own line, between @{ and }.`
+    );
+  }
+  return new Error(`${opened} is never closed. Close it with } on the same line.`);
+}
+
 /**
  * Parses `input`. A located error names the line of the source the text came from: pass the
  * number of lines that were removed in front of `input` (front matter) as `precedingLines`.
@@ -813,18 +919,31 @@ function syntaxErrorLocation(input: string, token: IToken): Location {
 export function parseBpmn(input: string, precedingLines = 0): ParsedDiagram {
   bpmnParser.input = [];
   lineOffset = precedingLines;
+  const config = {
+    diagramType: 'bpmn',
+    lexer: bpmnLexer,
+    parser: bpmnParser,
+    entry: () => bpmnParser.diagram(),
+    lineOffset: precedingLines,
+  };
   try {
+    // A block left open is refused where it opens, before anything written after it, but
+    // after a syntax error written before it: the text up to the block is read first.
+    const unclosed = firstUnclosedBlock(input);
+    if (unclosed) {
+      runChevrotainParse(
+        { ...config, visit: () => undefined },
+        input.slice(0, unclosed.startOffset + unclosed.image.length)
+      );
+      throw unclosedBlockError(input, unclosed);
+    }
     runChevrotainParse(
       {
-        diagramType: 'bpmn',
-        lexer: bpmnLexer,
-        parser: bpmnParser,
-        entry: () => bpmnParser.diagram(),
+        ...config,
         visit: (cst) => {
           visitor.reset();
           visitor.visit(cst);
         },
-        lineOffset: precedingLines,
       },
       input
     );

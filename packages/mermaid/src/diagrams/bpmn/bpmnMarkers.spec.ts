@@ -222,6 +222,47 @@ describe('element attributes', () => {
     );
   });
 
+  it('finds the key it refuses outside quoted values', () => {
+    // "foo: b" inside the quoted state is not the key foo, which is written at column 35.
+    expect(() => parseBpmn(inLane('data d @{ state: "a, foo: b", foo: 1 }'))).toThrow(
+      /^BPMN error at line 3, column 35: "foo" is not an attribute of a data object/
+    );
+    expect(() => parseBpmn(inLane('task t @{ "colour": red }'))).toThrow(
+      /^BPMN error at line 3, column 15: "colour" is not an attribute/
+    );
+  });
+
+  it('reads an escaped quote inside a quoted value', () => {
+    expect(parsed(inLane('data d @{ state: "a\\"}" }')).get('d')?.state).toBe('a"}');
+    // YAML gives a backslash no meaning in single quotes, so the block lexes but is refused.
+    expect(() => parseBpmn(inLane("data d @{ state: 'a\\'}' }"))).toThrow(
+      /^BPMN error at line 3, column 12: the attributes .* cannot be read/
+    );
+  });
+
+  it('draws a state alone when the data object has no name', () => {
+    const nodes = [...build(inLane('data @{ state: approved }')).values()];
+    const data = nodes.find((node) => node.metadata?.state === 'approved');
+    expect(data?.label).toBe('[approved]');
+  });
+
+  it('checks the keys in the order they are written', () => {
+    // Object.entries would put the integer-like key 2 first.
+    expect(() => parseBpmn(inLane('task t @{ marker: bogus, 2: x }'))).toThrow(
+      /^BPMN error at line 3, column 15: marker takes/
+    );
+  });
+
+  it('refuses a block left open on its line before a later syntax error', () => {
+    expect(() =>
+      parseBpmn(inLane('task t @{ marker: loop', 'task u @{ marker: loop } "U"'))
+    ).toThrow(/^BPMN error at line 3, column 12: the attributes block opened here is never closed/);
+    // A syntax error written before the open block still comes first.
+    expect(() => parseBpmn(inLane('task a "A" "B"', 'task t @{ marker: loop'))).toThrow(
+      /^Error parsing bpmn diagram: Redundant input.* at line 3, column 16$/
+    );
+  });
+
   it('refuses a block on a lane, which takes nothing yet', () => {
     expect(() => parseBpmn('bpmn-beta LR\n  lane l "L" @{ multiple: true }')).toThrow(
       'a lane takes no attributes'
