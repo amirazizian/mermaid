@@ -267,13 +267,19 @@ class BpmnVisitor extends BpmnBaseVisitor {
   private baseLevel: number | undefined;
   /** The errors found while reading, each with where its statement starts. */
   private problems: { at?: Location; error: unknown }[] = [];
+  /** When set, only an error written before this place is thrown. */
+  private onlyBefore: Location | undefined;
+  /** Off while only the start of a diagram is read, where a flow's end may be declared later. */
+  private checkFlowEnds = true;
 
   constructor() {
     super();
     this.validateVisitor();
   }
 
-  public reset() {
+  public reset(options: { onlyBefore?: Location; checkFlowEnds?: boolean } = {}) {
+    this.onlyBefore = options.onlyBefore;
+    this.checkFlowEnds = options.checkFlowEnds ?? true;
     this.nodes = [];
     this.flows = [];
     this.direction = 'LR';
@@ -302,12 +308,13 @@ class BpmnVisitor extends BpmnBaseVisitor {
   /** Throws the error written first in the source, if any was found. */
   private throwFirstProblem(): void {
     const rank = (at?: Location) => (at ? [at.line, at.column] : [Infinity, Infinity]);
-    const [first] = [...this.problems].sort((a, b) => {
-      const [lineA, columnA] = rank(a.at);
-      const [lineB, columnB] = rank(b.at);
+    const order = (a?: Location, b?: Location) => {
+      const [lineA, columnA] = rank(a);
+      const [lineB, columnB] = rank(b);
       return lineA - lineB || columnA - columnB;
-    });
-    if (first) {
+    };
+    const [first] = [...this.problems].sort((a, b) => order(a.at, b.at));
+    if (first && (!this.onlyBefore || order(first.at, this.onlyBefore) < 0)) {
       throw first.error;
     }
   }
@@ -333,7 +340,7 @@ class BpmnVisitor extends BpmnBaseVisitor {
     }
     this.assignGeneratedIds();
     this.assignParents();
-    for (const flow of this.flows) {
+    for (const flow of this.checkFlowEnds ? this.flows : []) {
       this.attempt(written.get(flow), () =>
         assertFlowRefersToDeclaredElements(flow, this.declared)
       );
@@ -602,14 +609,26 @@ const describe = (node: ParsedNode): string => {
   }
 };
 
-/** Where the quoted text that opens at `start` ends, just after its closing quote. */
+/**
+ * Where the quoted text that opens at `start` ends, just after its closing quote, as YAML reads
+ * it: a backslash escapes the next character in double quotes only, and a single quote is
+ * written twice inside single quotes. Quoted text that is not closed runs to the end.
+ */
 function quotedEnd(text: string, start: number): number {
   const quote = text[start];
   let index = start + 1;
-  while (index < text.length && text[index] !== quote) {
-    index += text[index] === '\\' ? 2 : 1;
+  while (index < text.length) {
+    if (quote === '"' && text[index] === '\\') {
+      index += 2;
+    } else if (text[index] !== quote) {
+      index++;
+    } else if (quote === "'" && text[index + 1] === "'") {
+      index += 2;
+    } else {
+      return index + 1;
+    }
   }
-  return Math.min(index + 1, text.length);
+  return text.length;
 }
 
 /** A key as YAML reads it, so that `"2"`, `'2'` and `2` all name the key `2`. */
@@ -895,21 +914,96 @@ function firstUnclosedBlock(input: string): IToken | undefined {
 }
 
 /**
- * The error for a block that is not closed on its line. It runs on to the next line when that
- * line closes it, before opening a block of its own; otherwise it is never closed.
+ * Where an unclosed block ends when the line after it closes it: just after that line's first
+ * `}` that is not inside quotes or a comment and comes before any block the line opens itself.
  */
-function unclosedBlockError(input: string, block: IToken): Error {
-  const opened = `BPMN error${atText(locationOf(block))}: the attributes block opened here`;
-  const nextLine = input
-    .slice(block.startOffset + block.image.length)
-    .replace(/^(\r\n|\r|\n)/, '')
-    .split(LINE_BREAK)[0];
-  if (nextLine.split('@{')[0].includes('}')) {
-    return new Error(
+function closedOnNextLine(input: string, block: IToken): number | undefined {
+  const afterBlock = block.startOffset + block.image.length;
+  const lineBreak = /^(?:\r\n|\r|\n)/.exec(input.slice(afterBlock));
+  if (!lineBreak) {
+    return undefined;
+  }
+  const start = afterBlock + lineBreak[0].length;
+  const line = input.slice(start).split(LINE_BREAK)[0];
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index];
+    if (char === '}') {
+      return start + index + 1;
+    }
+    if (line.startsWith('%%', index) || line.startsWith('@{', index)) {
+      return undefined;
+    }
+    if (char === '"' || char === "'") {
+      index = quotedEnd(line, index) - 1;
+    }
+  }
+  return undefined;
+}
+
+type ParseConfig = Omit<Parameters<typeof runChevrotainParse>[0], 'visit'>;
+
+/**
+ * Reads `text` for the errors a diagram's rules give, and throws the first that is written
+ * before `before`. Returns whether the text could be read at all: a lexing or syntax error in
+ * it is not thrown.
+ */
+function readForProblemsBefore(
+  config: ParseConfig,
+  text: string,
+  before: Location | undefined,
+  checkFlowEnds: boolean
+): boolean {
+  let read = false;
+  try {
+    runChevrotainParse(
+      {
+        ...config,
+        visit: (cst) => {
+          read = true;
+          visitor.reset({ onlyBefore: before, checkFlowEnds });
+          visitor.visit(cst);
+        },
+      },
+      text
+    );
+  } catch (error) {
+    if (read) {
+      throw error;
+    }
+  }
+  return read;
+}
+
+/**
+ * Refuses a block that is not closed on its line. An error written before the block comes
+ * first, as it would if the block were closed: a syntax error, or one of the diagram's rules,
+ * which are checked on the text with the block blanked out.
+ */
+function refuseUnclosedBlock(config: ParseConfig, input: string, block: IToken): never {
+  const blockEnd = block.startOffset + block.image.length;
+  runChevrotainParse({ ...config, visit: () => undefined }, input.slice(0, blockEnd));
+
+  const closedAt = closedOnNextLine(input, block);
+  const blank = (from: number, to: number) => input.slice(from, to).replace(/[^\n\r]/g, ' ');
+  const start = input.slice(0, block.startOffset);
+  const at = locationOf(block);
+  const whole =
+    start + blank(block.startOffset, closedAt ?? blockEnd) + input.slice(closedAt ?? blockEnd);
+  // What follows the block may not be readable. The text up to it still is, and there a flow
+  // may end at an element declared later, so the ends of flows are left unchecked.
+  if (!readForProblemsBefore(config, whole, at, true)) {
+    readForProblemsBefore(config, start, at, false);
+  }
+
+  // Drop what the last reading left, so the error below is not taken for a syntax error.
+  bpmnParser.input = [];
+  const opened = `BPMN error${atText(at)}: the attributes block opened here`;
+  if (closedAt !== undefined) {
+    throw new Error(
       `${opened} runs on to the next line. Write an element's attributes on its own line, between @{ and }.`
     );
   }
-  return new Error(`${opened} is never closed. Close it with } on the same line.`);
+  throw new Error(`${opened} is never closed. Close it with } on the same line.`);
 }
 
 /**
@@ -919,7 +1013,7 @@ function unclosedBlockError(input: string, block: IToken): Error {
 export function parseBpmn(input: string, precedingLines = 0): ParsedDiagram {
   bpmnParser.input = [];
   lineOffset = precedingLines;
-  const config = {
+  const config: ParseConfig = {
     diagramType: 'bpmn',
     lexer: bpmnLexer,
     parser: bpmnParser,
@@ -927,15 +1021,10 @@ export function parseBpmn(input: string, precedingLines = 0): ParsedDiagram {
     lineOffset: precedingLines,
   };
   try {
-    // A block left open is refused where it opens, before anything written after it, but
-    // after a syntax error written before it: the text up to the block is read first.
+    // A block left open is refused where it opens, before anything written after it.
     const unclosed = firstUnclosedBlock(input);
     if (unclosed) {
-      runChevrotainParse(
-        { ...config, visit: () => undefined },
-        input.slice(0, unclosed.startOffset + unclosed.image.length)
-      );
-      throw unclosedBlockError(input, unclosed);
+      refuseUnclosedBlock(config, input, unclosed);
     }
     runChevrotainParse(
       {

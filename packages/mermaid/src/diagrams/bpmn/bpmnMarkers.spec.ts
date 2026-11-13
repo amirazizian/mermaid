@@ -263,6 +263,79 @@ describe('element attributes', () => {
     );
   });
 
+  it.each([
+    [
+      ['task t "T" @{ marker: bogus }', 'task u @{ marker: loop'],
+      /^BPMN error at line 3, column 19: marker takes/,
+    ],
+    [
+      ['task t "T"', 'task t "T2"', 'task u @{ marker: loop'],
+      /^BPMN error at line 4, column 10: "t" is already declared/,
+    ],
+    [['end timer e', 'task u @{ marker: loop'], /^BPMN error at line 3, column \d+: .*timer/],
+    [
+      ['task t', 't --> zz', 'task u @{ marker: loop'],
+      /^BPMN error at line 4, column 5: the flow "t --> zz" refers to "zz"/,
+    ],
+    [
+      ['task a "A"', '  task b "B"', 'task u @{ marker: loop'],
+      /^BPMN error at line 4, column 7: a task cannot be indented/,
+    ],
+    // The same, when what follows the open block cannot be read either.
+    [
+      ['task t "T" @{ marker: bogus }', 'task u @{ marker: loop', 'task v "V" "W"'],
+      /^BPMN error at line 3, column 19: marker takes/,
+    ],
+  ])('reports an error written before a block left open: %j', (lines, message) => {
+    expect(() => parseBpmn(inLane(...lines))).toThrow(message);
+  });
+
+  it.each([
+    // A flow written before the open block may end at an element declared after it.
+    [['task t', 't --> v', 'task u @{ marker: loop', 'task v']],
+    [['task t', 't --> v', 'task u @{ marker: loop', 'task v "V" "W"']],
+    // An error written after the block does not come before it.
+    [['task u @{ marker: loop', 'task t "T" @{ marker: bogus }']],
+    [['task u @{ marker: loop', 'u --> zz']],
+  ])('reports a block left open before anything after it: %j', (lines) => {
+    const line = 3 + lines.findIndex((text) => text.endsWith('loop'));
+    expect(() => parseBpmn(inLane(...lines))).toThrow(
+      new RegExp(
+        `^BPMN error at line ${line}, column 12: the attributes block opened here is never`
+      )
+    );
+  });
+
+  it('reports an error written before a block that runs on to the next line', () => {
+    expect(() =>
+      parseBpmn(inLane('task t "T"', 'task t "T2" @{ marker: loop,', '  calls: process }'))
+    ).toThrow(/^BPMN error at line 4, column 10: "t" is already declared/);
+  });
+
+  it.each([['task u "U}"'], ['%% }'], ['task u "U" %% }'], ['task u @{ marker: "}" }']])(
+    'does not take a } in `%s` on the next line for the end of the block',
+    (next) => {
+      expect(() => parseBpmn(inLane('task t @{ marker: loop', next))).toThrow(
+        /^BPMN error at line 3, column 12: the attributes block opened here is never closed/
+      );
+    }
+  );
+
+  it('finds a key after a single-quoted value that ends in a backslash', () => {
+    // YAML gives a backslash no meaning in single quotes: the state is `a\`, and foo is a key.
+    expect(() => parseBpmn(inLane("data d @{ state: 'a\\', foo: 1 }"))).toThrow(
+      /^BPMN error at line 3, column 28: "foo" is not an attribute of a data object/
+    );
+    expect(parsed(inLane("data d @{ state: 'it''s' }")).get('d')?.state).toBe("it's");
+  });
+
+  it('reads a long line with a quote that is never closed in linear time', () => {
+    const source = inLane('data d @{ state: "' + '\\"'.repeat(200_000));
+    const started = performance.now();
+    expect(() => parseBpmn(source)).toThrow('is never closed');
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it('refuses a block on a lane, which takes nothing yet', () => {
     expect(() => parseBpmn('bpmn-beta LR\n  lane l "L" @{ multiple: true }')).toThrow(
       'a lane takes no attributes'

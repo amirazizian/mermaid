@@ -130,13 +130,14 @@ export const QuotedString = createToken({ name: 'QuotedString', pattern: /"[^\n\
  * A `}` inside a quoted value does not close the block, and a quoted value may hold an escaped
  * quote (`\"` or `\'`). The token stops at the end of its line, closed or not, so the parser can
  * refuse an unclosed block with a BPMN error that names where it opened, before anything
- * written after it. Inside a quoted part a character is read one way only (an escape or a plain
- * character), so a quote that is not closed is given up on in one pass and the pattern does not
- * backtrack exponentially.
+ * written after it.
+ *
+ * A quote that is not closed takes the rest of its line. Nothing in the pattern can then fail
+ * after it has started, so it never backtracks and reads a line once, however long.
  */
 export const Attributes = createToken({
   name: 'Attributes',
-  pattern: /@{(?:"(?:[^\n\r"\\]|\\[^\n\r])*"|'(?:[^\n\r'\\]|\\[^\n\r])*'|[^\n\r}])*}?/,
+  pattern: /@{(?:"(?:[^\n\r"\\]|\\[^\n\r]?)*"?|'(?:[^\n\r'\\]|\\[^\n\r]?)*'?|[^\n\r"'}])*}?/,
 });
 
 export const LabelledArrow = createToken({
