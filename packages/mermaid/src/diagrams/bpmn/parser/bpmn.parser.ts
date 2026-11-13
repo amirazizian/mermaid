@@ -13,6 +13,7 @@ import {
 } from '../types.js';
 import type { LoopKind } from '../types.js';
 import { isKnownLocation, runChevrotainParse } from '../../common/parser/runChevrotainParse.js';
+import { scanAttributeBlock } from './bpmnAttributeBlock.js';
 
 const listOf = (items: string[]): string =>
   items.length > 1 ? `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}` : items[0];
@@ -208,6 +209,14 @@ const locationOf = (token: IToken | undefined): Location | undefined =>
 const atText = (where: Location | undefined): string =>
   where ? ` at line ${where.line}, column ${where.column}` : '';
 
+const LOCATED = /^BPMN error at line (\d+), column (\d+)/;
+
+/** The place a BPMN error names, as `atText` wrote it. */
+const locationIn = (error: unknown): Location | undefined => {
+  const found = error instanceof Error ? LOCATED.exec(error.message) : null;
+  return found ? { line: Number(found[1]), column: Number(found[2]) } : undefined;
+};
+
 /** The article a keyword takes in a message: `an` before a vowel sound (`end`, `intermediate`, `xor`). */
 const articleFor = (word: string): string => (/^[aeiox]/i.test(word) ? 'an' : 'a');
 
@@ -238,12 +247,19 @@ interface WrittenKey {
 interface WrittenAttributes {
   values: Record<string, unknown>;
   keys: WrittenKey[];
+  /** Where each key is first written, counted from the start of the block. */
+  offsets: Map<string, number>;
   at?: Location;
   image: string;
 }
 
+/** A block that could not be read. The error is kept until the element has been declared. */
+interface UnreadableAttributes {
+  unreadable: Error;
+}
+
 /** What was written in an element's `@{ }` block, held until the element knows its own kind. */
-const pendingAttributes = new WeakMap<object, WrittenAttributes>();
+const pendingAttributes = new WeakMap<object, WrittenAttributes | UnreadableAttributes>();
 
 const remember = (parsed: object, token: IToken | undefined): void => {
   const where = locationOf(token);
@@ -269,17 +285,20 @@ class BpmnVisitor extends BpmnBaseVisitor {
   private problems: { at?: Location; error: unknown }[] = [];
   /** When set, only an error written before this place is thrown. */
   private onlyBefore: Location | undefined;
-  /** Off while only the start of a diagram is read, where a flow's end may be declared later. */
-  private checkFlowEnds = true;
+  /**
+   * Text that was left out of the reading. A flow's end that is named in it may be declared
+   * there, so it is not reported as undeclared.
+   */
+  private leftOut: string | undefined;
 
   constructor() {
     super();
     this.validateVisitor();
   }
 
-  public reset(options: { onlyBefore?: Location; checkFlowEnds?: boolean } = {}) {
+  public reset(options: { onlyBefore?: Location; leftOut?: string } = {}) {
     this.onlyBefore = options.onlyBefore;
-    this.checkFlowEnds = options.checkFlowEnds ?? true;
+    this.leftOut = options.leftOut;
     this.nodes = [];
     this.flows = [];
     this.direction = 'LR';
@@ -300,7 +319,9 @@ class BpmnVisitor extends BpmnBaseVisitor {
     try {
       return check();
     } catch (error) {
-      this.problems.push({ at, error });
+      // An error that names its own place is ranked by it, so that of two errors in one
+      // statement the one written first is reported.
+      this.problems.push({ at: locationIn(error) ?? at, error });
       return undefined;
     }
   }
@@ -340,10 +361,17 @@ class BpmnVisitor extends BpmnBaseVisitor {
     }
     this.assignGeneratedIds();
     this.assignParents();
-    for (const flow of this.checkFlowEnds ? this.flows : []) {
-      this.attempt(written.get(flow), () =>
-        assertFlowRefersToDeclaredElements(flow, this.declared)
-      );
+    const leftOut = this.leftOut;
+    const declared = leftOut
+      ? new Set([
+          ...this.declared,
+          ...this.flows
+            .flatMap((flow) => [flow.from, flow.to])
+            .filter((id) => leftOut.includes(id)),
+        ])
+      : this.declared;
+    for (const flow of this.flows) {
+      this.attempt(written.get(flow), () => assertFlowRefersToDeclaredElements(flow, declared));
     }
     this.throwFirstProblem();
   }
@@ -609,103 +637,90 @@ const describe = (node: ParsedNode): string => {
   }
 };
 
-/**
- * Where the quoted text that opens at `start` ends, just after its closing quote, as YAML reads
- * it: a backslash escapes the next character in double quotes only, and a single quote is
- * written twice inside single quotes. Quoted text that is not closed runs to the end.
- */
-function quotedEnd(text: string, start: number): number {
-  const quote = text[start];
-  let index = start + 1;
-  while (index < text.length) {
-    if (quote === '"' && text[index] === '\\') {
-      index += 2;
-    } else if (text[index] !== quote) {
-      index++;
-    } else if (quote === "'" && text[index + 1] === "'") {
-      index += 2;
-    } else {
-      return index + 1;
-    }
-  }
-  return text.length;
-}
+const PLAIN_KEY = /^[A-Z_a-z][\w-]*$/;
+const YAML_WORDS = new Set([
+  'true',
+  'false',
+  'null',
+  'True',
+  'False',
+  'Null',
+  'TRUE',
+  'FALSE',
+  'NULL',
+]);
 
-/** A key as YAML reads it, so that `"2"`, `'2'` and `2` all name the key `2`. */
+/** A key as YAML names it in a flow mapping, so that `"2"`, `'2'` and `2` all name the key `2`. */
 function keyName(written: string): string {
+  if (PLAIN_KEY.test(written) && !YAML_WORDS.has(written)) {
+    return written;
+  }
   try {
-    const read: unknown = yaml.load(written, { schema: yaml.JSON_SCHEMA });
-    if (typeof read === 'string') {
-      return read;
-    }
-    return typeof read === 'number' || typeof read === 'boolean' || read === null
-      ? String(read)
-      : written;
+    const read: unknown = yaml.load(`{${written}: 0}`, { schema: yaml.JSON_SCHEMA });
+    const names = read && typeof read === 'object' ? Object.keys(read) : [];
+    return names.length === 1 ? names[0] : written;
   } catch {
     return written;
   }
 }
 
-/**
- * The keys written at the top of an element's `@{ }` block, in the order they are written.
- * Quoted text is skipped whole, so a `key:` inside a quoted value is not taken for a key.
- */
-function writtenKeys(image: string): WrittenKey[] {
-  const keys: WrittenKey[] = [];
-  let depth = 0;
-  let expectingKey = true;
-  for (let index = 2; index < image.length; index++) {
-    const char = image[index];
-    if (char === '"' || char === "'") {
-      const end = quotedEnd(image, index);
-      if (expectingKey && depth === 0) {
-        keys.push({ key: keyName(image.slice(index, end)), offset: index });
-        expectingKey = false;
-      }
-      index = end - 1;
-    } else if (char === '[' || char === '{') {
-      depth++;
-      expectingKey = false;
-    } else if (char === ']' || char === '}') {
-      depth--;
-    } else if (char === ',' && depth === 0) {
-      expectingKey = true;
-    } else if (expectingKey && depth === 0 && !/\s/.test(char)) {
-      let end = index;
-      while (end < image.length && !/[,:}]/.test(image[end])) {
-        end++;
-      }
-      keys.push({ key: keyName(image.slice(index, end).trim()), offset: index });
-      expectingKey = false;
-      index = end - 1;
-    }
-  }
-  return keys;
+/** The keys written at the top of an element's `@{ }` block, in the order they are written. */
+export function writtenKeys(image: string): WrittenKey[] {
+  return scanAttributeBlock(image, 0).keys.map(({ text, offset }) => ({
+    key: keyName(text),
+    offset,
+  }));
 }
 
+/**
+ * Whether a block's text ends where the block closes. A block whose last quote is left open is
+ * taken as closed when it ends in `}`, so that it is refused for the quote, not for the `}`.
+ */
+function isClosed(image: string): boolean {
+  const scanned = scanAttributeBlock(image, 0);
+  return scanned.closed || (scanned.openQuote && image.endsWith('}'));
+}
+
+/** A block as a message shows it: whole, unless it is long. */
+const shown = (image: string): string =>
+  image.length > 80 ? `${image.slice(0, 60)} … ${image.slice(-15)}` : image;
+
 /** Reads the inside of `@{ ... }` as a YAML flow mapping. */
-function readAttributes(token: IToken): WrittenAttributes {
+function readAttributes(token: IToken): WrittenAttributes | UnreadableAttributes {
   const at = locationOf(token);
+  const image = token.image;
+  const unreadable = (reason: string) => ({
+    unreadable: new Error(
+      `BPMN error${atText(at)}: the attributes ${shown(image)} cannot be read${reason}. Write them as key: value pairs separated by commas.`
+    ),
+  });
   let values: unknown;
   try {
-    values = yaml.load(`{${token.image.slice(2, -1)}}`, { schema: yaml.JSON_SCHEMA });
+    values = yaml.load(`{${image.slice(2, -1)}}`, { schema: yaml.JSON_SCHEMA });
   } catch (error) {
-    const reason = error instanceof yaml.YAMLException ? error.reason : String(error);
-    throw new Error(
-      `BPMN error${atText(at)}: the attributes ${token.image} cannot be read (${reason}). Write them as key: value pairs separated by commas.`
-    );
+    return unreadable(` (${error instanceof yaml.YAMLException ? error.reason : String(error)})`);
   }
   if (!values || typeof values !== 'object' || Array.isArray(values)) {
-    throw new Error(
-      `BPMN error${atText(at)}: the attributes ${token.image} cannot be read. Write them as key: value pairs separated by commas.`
-    );
+    return unreadable('');
   }
-  return {
-    values: values as Record<string, unknown>,
-    keys: writtenKeys(token.image),
-    at,
-    image: token.image,
-  };
+  const keys = writtenKeys(image);
+  const offsets = new Map<string, number>();
+  for (const { key, offset } of keys) {
+    if (!offsets.has(key)) {
+      offsets.set(key, offset);
+    }
+  }
+  return { values: values as Record<string, unknown>, keys, offsets, at, image };
+}
+
+/** A value as it is written, where YAML would read a number: `1.0` stays `1.0`, not `1`. */
+function asWritten(written: WrittenAttributes, key: string): unknown {
+  try {
+    const read = yaml.load(`{${written.image.slice(2, -1)}}`, { schema: yaml.FAILSAFE_SCHEMA });
+    return (read as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 const isBoolean = (value: unknown): value is boolean => typeof value === 'boolean';
@@ -769,24 +784,25 @@ const attributeRowOf = (node: ParsedNode): readonly string[] | undefined => {
  * key rather than at the `@{` that opens the block.
  */
 function keyLocation(written: WrittenAttributes, key: string): Location | undefined {
-  if (!written.at) {
-    return undefined;
-  }
-  const found = written.keys.find((entry) => entry.key === key);
-  return found ? { line: written.at.line, column: written.at.column + found.offset } : written.at;
+  const offset = written.offsets.get(key);
+  return written.at && offset !== undefined
+    ? { line: written.at.line, column: written.at.column + offset }
+    : written.at;
 }
 
 /** An element's attributes in the order they are written, not the order `Object.entries` gives. */
 function entriesInWrittenOrder(written: WrittenAttributes): [string, unknown][] {
-  const keys = [...new Set(written.keys.map((entry) => entry.key))].filter((key) =>
-    Object.hasOwn(written.values, key)
-  );
-  for (const key of Object.keys(written.values)) {
-    if (!keys.includes(key)) {
-      keys.push(key);
+  const keys = new Set<string>();
+  for (const key of written.offsets.keys()) {
+    if (Object.hasOwn(written.values, key)) {
+      keys.add(key);
     }
   }
-  return keys.map((key) => [key, written.values[key]]);
+  // A key the scan did not follow (a list or a mapping written as a key) comes last.
+  for (const key of Object.keys(written.values)) {
+    keys.add(key);
+  }
+  return [...keys].map((key) => [key, written.values[key]]);
 }
 
 /** Checks an element's `@{ }` block against what that element takes, and records each value. */
@@ -795,20 +811,23 @@ function applyAttributes(node: ParsedNode): void {
   if (!written) {
     return;
   }
+  if ('unreadable' in written) {
+    throw written.unreadable;
+  }
   const allowed = attributeRowOf(node);
   if (!allowed) {
     throw new Error(`BPMN error${atText(written.at)}: ${describe(node)} takes no attributes.`);
   }
 
   for (const [key, value] of entriesInWrittenOrder(written)) {
+    if (!allowed.includes(key)) {
+      throw new Error(
+        `BPMN error${atText(keyLocation(written, key))}: "${key}" is not an attribute of ${describe(node)}, which takes ${listOf([...allowed])}.`
+      );
+    }
     const where = `BPMN error${atText(keyLocation(written, key))}`;
     const wrongValue = (expected: string) =>
       new Error(`${where}: ${key} takes ${expected}, not ${JSON.stringify(value)}.`);
-    if (!allowed.includes(key)) {
-      throw new Error(
-        `${where}: "${key}" is not an attribute of ${describe(node)}, which takes ${listOf([...allowed])}.`
-      );
-    }
     switch (key) {
       case 'multiple':
         if (!isBoolean(value)) {
@@ -837,7 +856,7 @@ function applyAttributes(node: ParsedNode): void {
         }
         break;
       case 'state': {
-        const state = typeof value === 'number' ? String(value) : value;
+        const state = typeof value === 'number' ? asWritten(written, key) : value;
         if (typeof state !== 'string' || !state.trim() || /[[\]]/.test(state)) {
           throw wrongValue('a name without brackets');
         }
@@ -910,34 +929,7 @@ function firstUnclosedBlock(input: string): IToken | undefined {
   }
   return bpmnLexer
     .tokenize(input)
-    .tokens.find((token) => token.tokenType === t.Attributes && !token.image.endsWith('}'));
-}
-
-/**
- * Where an unclosed block ends when the line after it closes it: just after that line's first
- * `}` that is not inside quotes or a comment and comes before any block the line opens itself.
- */
-function closedOnNextLine(input: string, block: IToken): number | undefined {
-  const afterBlock = block.startOffset + block.image.length;
-  const lineBreak = /^(?:\r\n|\r|\n)/.exec(input.slice(afterBlock));
-  if (!lineBreak) {
-    return undefined;
-  }
-  const start = afterBlock + lineBreak[0].length;
-  const line = input.slice(start).split(LINE_BREAK)[0];
-  for (let index = 0; index < line.length; index++) {
-    const char = line[index];
-    if (char === '}') {
-      return start + index + 1;
-    }
-    if (line.startsWith('%%', index) || line.startsWith('@{', index)) {
-      return undefined;
-    }
-    if (char === '"' || char === "'") {
-      index = quotedEnd(line, index) - 1;
-    }
-  }
-  return undefined;
+    .tokens.find((token) => token.tokenType === t.Attributes && !isClosed(token.image));
 }
 
 type ParseConfig = Omit<Parameters<typeof runChevrotainParse>[0], 'visit'>;
@@ -951,7 +943,7 @@ function readForProblemsBefore(
   config: ParseConfig,
   text: string,
   before: Location | undefined,
-  checkFlowEnds: boolean
+  leftOut: string
 ): boolean {
   let read = false;
   try {
@@ -960,7 +952,7 @@ function readForProblemsBefore(
         ...config,
         visit: (cst) => {
           read = true;
-          visitor.reset({ onlyBefore: before, checkFlowEnds });
+          visitor.reset({ onlyBefore: before, leftOut });
           visitor.visit(cst);
         },
       },
@@ -983,22 +975,24 @@ function refuseUnclosedBlock(config: ParseConfig, input: string, block: IToken):
   const blockEnd = block.startOffset + block.image.length;
   runChevrotainParse({ ...config, visit: () => undefined }, input.slice(0, blockEnd));
 
-  const closedAt = closedOnNextLine(input, block);
-  const blank = (from: number, to: number) => input.slice(from, to).replace(/[^\n\r]/g, ' ');
+  // The block runs on when a later line closes it, before opening a block or a comment.
+  const across = scanAttributeBlock(input, block.startOffset, true);
+  const leftOutEnd = across.closed ? across.end : blockEnd;
+  const leftOut = input.slice(block.startOffset, leftOutEnd);
   const start = input.slice(0, block.startOffset);
   const at = locationOf(block);
-  const whole =
-    start + blank(block.startOffset, closedAt ?? blockEnd) + input.slice(closedAt ?? blockEnd);
-  // What follows the block may not be readable. The text up to it still is, and there a flow
-  // may end at an element declared later, so the ends of flows are left unchecked.
-  if (!readForProblemsBefore(config, whole, at, true)) {
-    readForProblemsBefore(config, start, at, false);
+  // What is left out may declare an element, when a line taken for the rest of the block is a
+  // statement of its own; and what follows the block may not be readable at all. Either way a
+  // flow that ends at an element named in the text left out is not reported as undeclared.
+  const whole = start + leftOut.replace(/[^\n\r]/g, ' ') + input.slice(leftOutEnd);
+  if (!readForProblemsBefore(config, whole, at, leftOut)) {
+    readForProblemsBefore(config, start, at, input.slice(block.startOffset));
   }
 
   // Drop what the last reading left, so the error below is not taken for a syntax error.
   bpmnParser.input = [];
   const opened = `BPMN error${atText(at)}: the attributes block opened here`;
-  if (closedAt !== undefined) {
+  if (across.closed) {
     throw new Error(
       `${opened} runs on to the next line. Write an element's attributes on its own line, between @{ and }.`
     );

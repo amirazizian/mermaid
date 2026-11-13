@@ -419,8 +419,8 @@ The column is that of the key the message is about.
 **An attribute block that is not closed on its line.** An element's attributes are written on
 its own line, between `@{` and `}`; a `}` inside a quoted value does not close the block, and a
 double-quoted value can hold an escaped quote (`"a\"b"`). The block ends with its line, so this
-error comes before anything written after it. The block runs on to the next line when that line
-closes it; otherwise it is never closed:
+error comes before anything written after it, and after an error written before it. The block
+runs on when a later line closes it; otherwise it is never closed:
 
 ```txt
 BPMN error at line N, column C: the attributes block opened here is never closed. Close it with } on the same line.

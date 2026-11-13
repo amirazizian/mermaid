@@ -234,9 +234,17 @@ describe('element attributes', () => {
 
   it('reads an escaped quote inside a quoted value', () => {
     expect(parsed(inLane('data d @{ state: "a\\"}" }')).get('d')?.state).toBe('a"}');
-    // YAML gives a backslash no meaning in single quotes, so the block lexes but is refused.
-    expect(() => parseBpmn(inLane("data d @{ state: 'a\\'}' }"))).toThrow(
-      /^BPMN error at line 3, column 12: the attributes .* cannot be read/
+    // YAML gives a backslash no meaning in single quotes: the value ends at the next quote.
+    expect(parsed(inLane("data d @{ state: 'a\\' }")).get('d')?.state).toBe('a\\');
+    // So here the block closes after `a\`, and what is left on the line is refused there.
+    expect(() => parseBpmn(inLane("data d @{ state: 'a\\'}' }", 'task t'))).toThrow(/at line 3/);
+  });
+
+  it('reads a quote inside an unquoted value as a plain character', () => {
+    expect(parsed(inLane("data d @{ state: it's } %% a note")).get('d')?.state).toBe("it's");
+    expect(parsed(inLane('data d @{ state: 5" } %% a note')).get('d')?.state).toBe('5"');
+    expect(() => parseBpmn(inLane("data d @{ state: it's, foo: 1 }"))).toThrow(
+      /^BPMN error at line 3, column 28: "foo" is not an attribute of a data object/
     );
   });
 
@@ -334,6 +342,88 @@ describe('element attributes', () => {
     const started = performance.now();
     expect(() => parseBpmn(source)).toThrow('is never closed');
     expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  // Inputs an independent review found wrong, each with the error it must give.
+  it.each<[string[], RegExp]>([
+    // A quote inside an unquoted value is a plain character.
+    [["data d @{ state: don't, x: 'a}' }"], /^BPMN error at line 3, column 29: "x" is not/],
+    [["data d @{ state: 'a\\', foo: 'b}' }"], /^BPMN error at line 3, column 28: "foo" is not/],
+    [["data d @{ state: don't, x: can't }"], /^BPMN error at line 3, column 29: "x" is not/],
+    // A block that cannot be read still declares its element.
+    [['task A', 'A --> B', 'task B @{ [ }'], /^BPMN error at line 5, column 12: .* cannot be read/],
+    [
+      ['task a', 'a --> t', 'task t @{ [ }', 'task u @{ marker: loop'],
+      /^BPMN error at line 5, column 12: .* cannot be read/,
+    ],
+    [
+      ['task A', 'A --> C', 'task B @{ marker: loop', 'task C @{ [['],
+      /^BPMN error at line 5, column 12: .* is never closed/,
+    ],
+    // Of two errors in one statement, the one written first.
+    [['task A', '  task B @{ bogus: 1 }'], /^BPMN error at line 4, column 7: a task cannot be/],
+    [['task A', '  start s @{ a: 1 }'], /^BPMN error at line 4, column 7: a start cannot be/],
+    [['boundary timer b @{ a: 1 }'], /^BPMN error at line 3, column 5: a boundary event must/],
+    [['task A', '  task B @{ [ }'], /^BPMN error at line 4, column 7: a task cannot be/],
+    [['task A', 'task A @{ [ }'], /^BPMN error at line 4, column 10: "A" is already declared/],
+    [['end timer e @{ [ }'], /^BPMN error at line 3, column 9: an end event cannot carry/],
+    // An undeclared flow end is still reported when what follows the open block is unreadable.
+    [
+      ['task t', 't --> zz', 'task u @{ marker: loop', 'task v $'],
+      /^BPMN error at line 4, column 5: the flow "t --> zz" refers to "zz"/,
+    ],
+    [
+      ['task t', 't --> zz', 'task u @{ marker: loop', 'task v "V" "W"'],
+      /^BPMN error at line 4, column 5: the flow "t --> zz" refers to "zz"/,
+    ],
+    // A mapping nested in the block is part of it.
+    [
+      ['task t @{ marker: {a: 1} }'],
+      /^BPMN error at line 3, column 15: marker takes .* not {"a":1}/,
+    ],
+    [['task t @{ marker: {a: 1}, bogus: 2 }'], /^BPMN error at line 3, column 15: marker takes/],
+    [['task t @{ a: {b: 1}'], /^BPMN error at line 3, column 12: .* is never closed/],
+    // A key is named and placed as YAML reads it.
+    [['task t @{ marker:loop }'], /^BPMN error at line 3, column 15: "marker:loop" is not/],
+    [
+      ['call c @{ calls: process, marker:loop }'],
+      /^BPMN error at line 3, column 31: "marker:loop" is not/,
+    ],
+    [['task t @{ a:b: 1, zzz: 2 }'], /^BPMN error at line 3, column 15: "a:b" is not/],
+    [['task t @{ ? colour : red, zzz: 1 }'], /^BPMN error at line 3, column 17: "colour" is not/],
+    [['task t @{ marker: loop, : a }'], /^BPMN error at line 3, column 29: "null" is not/],
+    [['task t @{ marker: loop, ---: a }'], /^BPMN error at line 3, column 29: "---" is not/],
+    // The line after an open block is a statement of its own, not the rest of the block.
+    [['task A @{ marker: loop', 'accDescr { hi }'], /^BPMN error at line 3, .* is never closed/],
+    [
+      ['task B', 'task A @{ marker: loop', 'A -- {x} --> B'],
+      /^BPMN error at line 4, column 12: .* is never closed/,
+    ],
+    [
+      ['task A', 'A --> B', 'task C @{ marker: loop', 'task B }'],
+      /^BPMN error at line 5, column 12: the attributes block opened here/,
+    ],
+    // A block closed further down runs on.
+    [['task t @{', '  marker: loop', '}'], /^BPMN error at line 3, column 12: .* runs on/],
+    [['data d @{', "  state: it's ready }"], /^BPMN error at line 3, column 12: .* runs on/],
+  ])('gives the right error for %j', (lines, message) => {
+    expect(() => parseBpmn(inLane(...lines))).toThrow(message);
+  });
+
+  it.each(['1.0', '007', '0x10', '1e3', '.inf', '2'])('keeps the state %s as written', (state) => {
+    expect(parsed(inLane(`data d @{ state: ${state} }`)).get('d')?.state).toBe(state);
+  });
+
+  it('shows a long block shortened in the message', () => {
+    const message = (() => {
+      try {
+        parseBpmn(inLane(`task t @{ marker: [ ${'x'.repeat(100_000)} }`));
+      } catch (error) {
+        return (error as Error).message;
+      }
+    })();
+    expect(message).toMatch(/cannot be read/);
+    expect(message!.length).toBeLessThan(400);
   });
 
   it('refuses a block on a lane, which takes nothing yet', () => {
