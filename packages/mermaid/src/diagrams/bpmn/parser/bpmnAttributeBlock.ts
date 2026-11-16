@@ -1,6 +1,8 @@
 /**
  * Reads the text of an element's `@{ key: value, ... }` block the way YAML reads a flow mapping,
- * far enough to know where the block ends and where its keys are written.
+ * far enough to know where the block ends and where its keys are written. Scalars, quoted
+ * text, lists, mappings, tags and anchors are followed; an alias or a list written as a key is
+ * not, which at worst places an error at the start of the block.
  *
  * The lexer and the parser both use this one reading. The lexer takes the block's extent from
  * it, and the parser takes the place of each key, so the two cannot come to disagree about
@@ -30,6 +32,21 @@ const isFlowIndicator = (char: string): boolean =>
 
 const isQuote = (char: string): boolean => char === '"' || char === "'";
 const isWordChar = (char: string | undefined): boolean => char !== undefined && /\w/.test(char);
+/** Whether the word that starts at `index` (a tag or an anchor) ends in a space on its line. */
+const endsWithSpace = (text: string, index: number): boolean => {
+  let end = index;
+  while (end < text.length && !isSpace(text[end]) && !isLineBreak(text[end])) {
+    if (isFlowIndicator(text[end])) {
+      return false;
+    }
+    end++;
+  }
+  return end < text.length && isSpace(text[end]);
+};
+
+/** A single quote straight after a letter or a digit, as in `it's`. */
+const isApostrophe = (text: string, index: number): boolean =>
+  text[index] === "'" && isWordChar(text[index - 1]);
 
 /** Whether the `:` at `index` separates a key from its value, rather than being part of a name. */
 const separates = (text: string, index: number): boolean => {
@@ -39,7 +56,7 @@ const separates = (text: string, index: number): boolean => {
 
 /** Whether a quote, a comment or a block starts at `index`: what ends plain text on a later line. */
 const startsOwnText = (text: string, index: number): boolean =>
-  (isQuote(text[index]) && !isWordChar(text[index - 1])) ||
+  (isQuote(text[index]) && !isApostrophe(text, index)) ||
   text.startsWith('%%', index) ||
   text.startsWith('@{', index);
 
@@ -110,9 +127,9 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
     afterQuoted = false;
     const topLevelKey = expectingKey && open.length === 0;
 
-    // On a line after the first, which may be a statement of its own, a quote also opens
-    // quoted text after a space, as it does in a label; the apostrophe in `it's` does not.
-    if ((atStart || (!firstLine && !isWordChar(text[index - 1]))) && isQuote(char)) {
+    // On a line after the first, which may be a statement of its own, a quote opens quoted
+    // text wherever it stands, as it does in a label; the apostrophe in `it's` does not.
+    if ((atStart || (!firstLine && !isApostrophe(text, index))) && isQuote(char)) {
       const quoted = quotedEnd(text, index);
       if (topLevelKey) {
         keys.push({ text: text.slice(index, quoted.end), offset: index - start });
@@ -134,6 +151,8 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
         open.pop();
       }
       atStart = false;
+      // Like quoted text, a list or a mapping may be followed by `:` with no space after it.
+      afterQuoted = true;
       index++;
     } else if (char === '}') {
       const mapping = open.lastIndexOf('{');
@@ -143,6 +162,7 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
       }
       open.length = mapping;
       atStart = false;
+      afterQuoted = true;
     } else if (char === ',') {
       expectingKey ||= open.length === 0;
       atStart = true;
@@ -158,6 +178,12 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
     } else if (atStart && topLevelKey && char === '?' && separates(text, index)) {
       // `? key : value`, the long way to write a key.
       index++;
+    } else if (atStart && (char === '!' || char === '&') && endsWithSpace(text, index)) {
+      // A tag (`!!str`) or an anchor (`&name`) stands in front of a key or a value, which
+      // starts after it.
+      while (index < text.length && !isSpace(text[index])) {
+        index++;
+      }
     } else {
       // Plain text runs to the next indicator, or to a `:` that separates.
       let end = index + 1;

@@ -351,7 +351,7 @@ bpmn-beta LR
 ```
 
 A key an element does not take, or a value it cannot use, is refused with the line and the
-column of the block.
+column of the key.
 
 ## Boundary events
 

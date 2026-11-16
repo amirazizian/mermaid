@@ -281,22 +281,22 @@ class BpmnVisitor extends BpmnBaseVisitor {
   private declared = new Set<string>();
 
   private baseLevel: number | undefined;
-  /** The errors found while reading, each with where its statement starts. */
+  /** The errors found while reading, each with the place it names, or else where its statement starts. */
   private problems: { at?: Location; error: unknown }[] = [];
   /** When set, only an error written before this place is thrown. */
   private onlyBefore: Location | undefined;
   /**
-   * Text that was left out of the reading. A flow's end that is named in it may be declared
-   * there, so it is not reported as undeclared.
+   * The ids that text left out of the reading may declare. A flow that ends at one of them is
+   * not reported as undeclared.
    */
-  private leftOut: string | undefined;
+  private leftOut: ReadonlySet<string> | undefined;
 
   constructor() {
     super();
     this.validateVisitor();
   }
 
-  public reset(options: { onlyBefore?: Location; leftOut?: string } = {}) {
+  public reset(options: { onlyBefore?: Location; leftOut?: ReadonlySet<string> } = {}) {
     this.onlyBefore = options.onlyBefore;
     this.leftOut = options.leftOut;
     this.nodes = [];
@@ -319,8 +319,8 @@ class BpmnVisitor extends BpmnBaseVisitor {
     try {
       return check();
     } catch (error) {
-      // An error that names its own place is ranked by it, so that of two errors in one
-      // statement the one written first is reported.
+      // An error that names its own place is ranked by it, so that of the errors kept for one
+      // statement (its attributes and its placement) the one written first is reported.
       this.problems.push({ at: locationIn(error) ?? at, error });
       return undefined;
     }
@@ -361,14 +361,8 @@ class BpmnVisitor extends BpmnBaseVisitor {
     }
     this.assignGeneratedIds();
     this.assignParents();
-    const leftOut = this.leftOut;
-    const declared = leftOut
-      ? new Set([
-          ...this.declared,
-          ...this.flows
-            .flatMap((flow) => [flow.from, flow.to])
-            .filter((id) => leftOut.includes(id)),
-        ])
+    const declared = this.leftOut?.size
+      ? new Set([...this.declared, ...this.leftOut])
       : this.declared;
     for (const flow of this.flows) {
       this.attempt(written.get(flow), () => assertFlowRefersToDeclaredElements(flow, declared));
@@ -943,7 +937,7 @@ function readForProblemsBefore(
   config: ParseConfig,
   text: string,
   before: Location | undefined,
-  leftOut: string
+  leftOut: ReadonlySet<string>
 ): boolean {
   let read = false;
   try {
@@ -966,10 +960,36 @@ function readForProblemsBefore(
   return read;
 }
 
+const FLOW_TOKENS: ReadonlySet<unknown> = new Set([
+  t.LabelledArrow,
+  t.MessageArrow,
+  t.Arrow,
+  t.AssociationArrow,
+  t.AssociationLine,
+]);
+
+/**
+ * The ids that `text` may declare: the names on its lines that are not flows. The text need
+ * not be readable as a diagram; what cannot be lexed is skipped.
+ */
+function idsDeclaredIn(text: string): Set<string> {
+  const names = new Map<number, string[]>();
+  const flowLines = new Set<number>();
+  for (const token of bpmnLexer.tokenize(text).tokens) {
+    const line = token.startLine ?? 0;
+    if (FLOW_TOKENS.has(token.tokenType)) {
+      flowLines.add(line);
+    } else if (token.tokenType === t.Identifier) {
+      names.set(line, [...(names.get(line) ?? []), token.image]);
+    }
+  }
+  return new Set([...names].flatMap(([line, ids]) => (flowLines.has(line) ? [] : ids)));
+}
+
 /**
  * Refuses a block that is not closed on its line. An error written before the block comes
- * first, as it would if the block were closed: a syntax error, or one of the diagram's rules,
- * which are checked on the text with the block blanked out.
+ * first: a syntax error, or one of the diagram's rules, which are checked on the text with
+ * the block blanked out.
  */
 function refuseUnclosedBlock(config: ParseConfig, input: string, block: IToken): never {
   const blockEnd = block.startOffset + block.image.length;
@@ -978,15 +998,19 @@ function refuseUnclosedBlock(config: ParseConfig, input: string, block: IToken):
   // The block runs on when a later line closes it, before opening a block or a comment.
   const across = scanAttributeBlock(input, block.startOffset, true);
   const leftOutEnd = across.closed ? across.end : blockEnd;
-  const leftOut = input.slice(block.startOffset, leftOutEnd);
   const start = input.slice(0, block.startOffset);
   const at = locationOf(block);
-  // What is left out may declare an element, when a line taken for the rest of the block is a
-  // statement of its own; and what follows the block may not be readable at all. Either way a
-  // flow that ends at an element named in the text left out is not reported as undeclared.
-  const whole = start + leftOut.replace(/[^\n\r]/g, ' ') + input.slice(leftOutEnd);
-  if (!readForProblemsBefore(config, whole, at, leftOut)) {
-    readForProblemsBefore(config, start, at, input.slice(block.startOffset));
+  // The lines taken for the rest of the block are left out of the reading, and one of them may
+  // be a statement of its own that declares an element. A flow written before the block that
+  // ends at such an element is not reported as undeclared.
+  const whole =
+    start +
+    input.slice(block.startOffset, leftOutEnd).replace(/[^\n\r]/g, ' ') +
+    input.slice(leftOutEnd);
+  if (!readForProblemsBefore(config, whole, at, idsDeclaredIn(input.slice(blockEnd, leftOutEnd)))) {
+    // What follows the block cannot be read. The text before it still can, and what follows
+    // may declare the elements its flows end at.
+    readForProblemsBefore(config, start, at, idsDeclaredIn(input.slice(blockEnd)));
   }
 
   // Drop what the last reading left, so the error below is not taken for a syntax error.

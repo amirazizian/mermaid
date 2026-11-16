@@ -126,10 +126,10 @@ export const QuotedString = createToken({ name: 'QuotedString', pattern: /"[^\n\
 
 /**
  * A trailing `@{ key: value, ... }` block of element attributes, on one line. Its contents
- * are read as a YAML flow mapping, the way flowchart, kanban and usecase read theirs.
+ * are read as a YAML flow mapping, the way flowchart and kanban read theirs.
  *
- * Where the block ends is not a regular language (a quote opens quoted text only where a value
- * starts, and a `}` may close a mapping nested in the block), so the token is matched by
+ * Where the block ends is not a regular language (a quote opens quoted text only where a key or
+ * a value starts, and a `}` may close a mapping nested in the block), so the token is matched by
  * `scanAttributeBlock`, which the parser also uses to find the block's keys. The token stops at
  * the end of its line, closed or not, so the parser can refuse an unclosed block with a BPMN
  * error that names where it opened, before anything written after it.

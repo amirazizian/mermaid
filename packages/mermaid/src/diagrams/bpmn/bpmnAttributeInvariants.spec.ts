@@ -4,9 +4,10 @@ import { parseBpmn, writtenKeys } from './parser/bpmn.parser.js';
 
 /**
  * These tests state what the `@{ }` block promises as rules over many inputs, rather than as
- * single examples: whichever two errors a diagram holds, the one written first is reported;
- * what follows a line never changes the error that line gives; a key is found where YAML
- * reads it; and a line is read in linear time, whatever it holds.
+ * single examples: of two rule errors in a diagram, the one written first is reported; a line
+ * that follows, and neither closes a block nor breaks the syntax, does not change the error a
+ * line gives; a key is found where YAML reads it; and a line of any content, 200,000 units
+ * long, is read within a bound that a quadratic reading would miss by minutes.
  */
 
 const inLane = (...lines: string[]) =>
@@ -46,7 +47,7 @@ interface ErrorKind {
   message: RegExp;
   /** A syntax error stops the reading, so it is reported before an earlier rule error. */
   syntax?: boolean;
-  /** A block left open: reported like a rule error, but stops what follows from being read. */
+  /** A block left open: reported like a rule error, and no error written after it is reported. */
   unclosed?: boolean;
 }
 
@@ -134,7 +135,7 @@ const ERROR_KINDS: ErrorKind[] = [
   },
 ];
 
-describe('the first error written is the one reported', () => {
+describe('of two errors, the one written first is reported, unless the second is a syntax error', () => {
   it.each(ERROR_KINDS)('reports $name alone, on its line', (kind) => {
     const message = errorOf(inLane(...kind.lines('a')));
     expect(message).toMatch(kind.message);
@@ -147,7 +148,7 @@ describe('the first error written is the one reported', () => {
     const firstLines = first.lines('a');
     const source = inLane(...firstLines, ...second.lines('b'));
     // A syntax error stops the reading, so it wins over a rule error written before it.
-    // Nothing after a block left open is read, so there a syntax error does not win.
+    // No error written after a block left open is reported, so there a syntax error does not win.
     const syntaxWins = second.syntax && !first.syntax && !first.unclosed;
     const expected = syntaxWins
       ? { kind: second, line: 3 + firstLines.length + second.errorLine }
@@ -157,11 +158,13 @@ describe('the first error written is the one reported', () => {
     expect(lineOf(message!)).toBe(expected.line);
   });
 
-  it.each(pairs)('a valid line, $first.name, a valid line, then $second.name', (pair) => {
+  // The pairs in which the first error is reported; the test above covers the others too.
+  const firstWins = pairs.filter(
+    ({ first, second }) => !(second.syntax && !first.syntax && !first.unclosed)
+  );
+
+  it.each(firstWins)('a valid line, $first.name, a valid line, then $second.name', (pair) => {
     const { first, second } = pair;
-    if (second.syntax && !first.syntax && !first.unclosed) {
-      return;
-    }
     const source = inLane(
       'task ok1 "One" @{ marker: loop }',
       ...first.lines('a'),
@@ -188,7 +191,7 @@ const randomBody = (random: () => number): string => {
   return body;
 };
 
-describe('what follows a line does not change the error it gives', () => {
+describe('a line with an error of its own, written after, does not change the error a line gives', () => {
   // The line that follows holds an error of its own, and nothing that could close a block.
   const next = 'end timer after';
   const random = seeded(8166);
@@ -198,7 +201,7 @@ describe('what follows a line does not change the error it gives', () => {
     return `${opener} ${randomBody(random)}${close}`;
   });
 
-  it('holds for 1500 generated blocks', () => {
+  it('gives the same BPMN error, or a syntax error on the same line, for 1500 generated blocks', () => {
     for (const line of cases) {
       const alone = errorOf(inLane(line));
       const followed = errorOf(inLane(line, next));
@@ -221,7 +224,7 @@ describe('a key is found where YAML reads it', () => {
   const random = seeded(8167);
   const bodies = Array.from({ length: 4000 }, () => randomBody(random));
 
-  it('finds the keys YAML reads, for 4000 generated blocks', () => {
+  it('finds the keys YAML reads, in those of 4000 generated blocks that YAML can read', () => {
     let readable = 0;
     for (const body of bodies) {
       let read: unknown;
@@ -237,9 +240,9 @@ describe('a key is found where YAML reads it', () => {
       const image = `@{${body}}`;
       const found = writtenKeys(image);
       const where = `for the block ${JSON.stringify(image)}`;
-      // Every key found is one YAML reads, and stands where the scan says it does. An anchor,
-      // an alias, a tag or a `?` key is not followed: there the scan may name what YAML does
-      // not, which only sends an error's column back to the start of the block.
+      // Every key found is one YAML reads, and stands where the scan says it does. Blocks
+      // with a tag, an anchor, an alias or a `?` key are left out of this check: the pieces
+      // put them together at random, mostly in ways the scan does not follow.
       const plain = !/[!&*?]/.test(body);
       for (const { key, offset } of found) {
         if (plain) {
@@ -265,7 +268,7 @@ describe('a key is found where YAML reads it', () => {
         where
       ).toEqual(offsets);
     }
-    expect(readable).toBeGreaterThan(200);
+    expect(readable).toBeGreaterThan(1000);
   });
 });
 
@@ -313,6 +316,27 @@ describe('a key is found where it is written', () => {
 });
 
 describe('a value is read as YAML reads it', () => {
+  it.each([
+    ['!!str "a}b"', 'a}b'],
+    ['&x "a}b"', 'a}b'],
+    ["!!str 'a}b'", 'a}b'],
+    ['!!str plain', 'plain'],
+  ])('state: %s, behind a tag or an anchor', (value, state) => {
+    const node = parseBpmn(inLane(`data d @{ state: ${value} } %% note`)).nodes.find(
+      (n) => n.id === 'd'
+    );
+    expect(node?.state).toBe(state);
+  });
+
+  it.each([
+    ['task t @{ !!str "a}b": 1 }', /column 21: "a}b" is not an attribute/],
+    ['task t @{ [a]:"x}y" }', /column 12: "a" is not an attribute/],
+    ['task t @{ marker: {a: 1}:"x}y" }', /cannot be read|marker takes/],
+  ])('reads `%s` to its end', (line, message) => {
+    expect(errorOf(inLane(line, 'end timer after'))).toMatch(message);
+    expect(lineOf(errorOf(inLane(line, 'end timer after'))!)).toBe(3);
+  });
+
   const VALUES = [
     'approved', "it's", "rock'n'roll", 'a"b', '"quoted"', "'single'", '"a\\"}"', "'it''s'", '"a}b"',
     "'a}b'", 'x:y', 'a b c', '"a, b: c"', "'a, b: c'", '2', '"it\'s"', "'say \"hi\"'", "don't}",
@@ -332,6 +356,8 @@ describe('a value is read as YAML reads it', () => {
       expected = undefined;
     }
     const source = inLane(line);
+    // With a line after it that has an error of its own, on line 4.
+    const followed = inLane(line, 'end timer after');
     const keys = Object.keys(
       (() => {
         try {
@@ -346,22 +372,23 @@ describe('a value is read as YAML reads it', () => {
       expect(node?.state).toBe(String(expected).trim());
     } else {
       // Not one state: whatever is wrong is reported on this line, as a BPMN error or a
-      // syntax error, and what follows the block is never taken for part of it.
-      expect(lineOf(errorOf(source)!)).toBe(3);
+      // syntax error, not on the line after it.
+      expect(lineOf(errorOf(followed)!)).toBe(3);
     }
   });
 });
 
-describe('a line is read in linear time', () => {
+// A reading that goes back over the line for each unit takes minutes at this length.
+describe('a long line is read within two seconds', () => {
   const UNITS = [
     '"', "'", '\\', '\\"', "\\'", '""', "''", '{', '}', '[', ']', ',', ':', '@{', '"a', "'a",
     '%%', ' ', 'a: "', "a: '", '{"', '\\\\',
   ]; // prettier-ignore
   const shapes = UNITS.flatMap((unit) => [
-    { unit, line: `data d @{ state: ${unit.repeat(50_000)}` },
-    { unit, line: `data d @{ state: ${unit.repeat(50_000)} }` },
-    { unit, line: `data d @{ state: "${unit.repeat(50_000)}` },
-    { unit, line: `data d @{ ${unit.repeat(50_000)}: x }` },
+    { unit, line: `data d @{ state: ${unit.repeat(200_000)}` },
+    { unit, line: `data d @{ state: ${unit.repeat(200_000)} }` },
+    { unit, line: `data d @{ state: "${unit.repeat(200_000)}` },
+    { unit, line: `data d @{ ${unit.repeat(200_000)}: x }` },
   ]);
 
   it.each([
@@ -375,7 +402,7 @@ describe('a line is read in linear time', () => {
     expect(performance.now() - started).toBeLessThan(2000);
   });
 
-  it.each(shapes)('50,000 of $unit: $line.length characters', ({ line }) => {
+  it.each(shapes)('200,000 of $unit: $line.length characters', ({ line }) => {
     const started = performance.now();
     errorOf(inLane(line, 'task u @{ marker: loop }'));
     expect(performance.now() - started).toBeLessThan(2000);

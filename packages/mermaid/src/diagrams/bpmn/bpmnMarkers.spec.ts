@@ -70,9 +70,9 @@ describe('activity markers', () => {
   });
 
   it('marks a compensation activity with a class as well as the marker', () => {
-    expect(build(inLane('task t "T" @{ marker: compensation }')).get('t')?.cssClasses).toContain(
-      'bpmn-compensation'
-    );
+    const task = build(inLane('task t "T" @{ marker: compensation }')).get('t');
+    expect(task?.cssClasses).toContain('bpmn-compensation');
+    expect(task?.markers).toEqual(['bpmn:compensation']);
   });
 
   it('only names glyphs the icon pack defines', () => {
@@ -337,7 +337,7 @@ describe('element attributes', () => {
     expect(parsed(inLane("data d @{ state: 'it''s' }")).get('d')?.state).toBe("it's");
   });
 
-  it('reads a long line with a quote that is never closed in linear time', () => {
+  it('reads a line of 400,000 characters with a quote that is never closed within a second', () => {
     const source = inLane('data d @{ state: "' + '\\"'.repeat(200_000));
     const started = performance.now();
     expect(() => parseBpmn(source)).toThrow('is never closed');
@@ -400,8 +400,38 @@ describe('element attributes', () => {
       /^BPMN error at line 4, column 12: .* is never closed/,
     ],
     [
+      ['task t @{ marker: loop', 'task u"U}"'],
+      /^BPMN error at line 3, column 12: .* is never closed/,
+    ],
+    // A } on the next line closes the block, which runs on. The element that line declares
+    // is not lost: the flow that ends at it is not reported.
+    [
       ['task A', 'A --> B', 'task C @{ marker: loop', 'task B }'],
-      /^BPMN error at line 5, column 12: the attributes block opened here/,
+      /^BPMN error at line 5, column 12: .* runs on to the next line/,
+    ],
+    // An undeclared flow end is reported though its id is part of a word in or after the block.
+    [['task t', 't --> a', 'task u @{ marker: loop'], /^BPMN error at line 4, .* refers to "a"/],
+    [['task a', 'a --> b', 'task u @{ marker: bogus'], /^BPMN error at line 4, .* refers to "b"/],
+    [
+      ['task a', 'a --> c', 'call u @{ calls: process'],
+      /^BPMN error at line 4, column 5: .* refers to "c"/,
+    ],
+    [
+      ['task t', 't --> zz', 'task u @{ marker: loop', 'task v "pizza" "W"'],
+      /^BPMN error at line 4, column 5: .* refers to "zz"/,
+    ],
+    [
+      ['task t', 't --> zz', 'task u @{ marker: loop', 'zz --> t', 'task v $'],
+      /^BPMN error at line 4, column 5: .* refers to "zz"/,
+    ],
+    [
+      ['task t', 't --> zz', 'task u @{ marker: loop', '%% zz comes later', 'task v $'],
+      /^BPMN error at line 4, column 5: .* refers to "zz"/,
+    ],
+    // But not when what cannot be read after the block declares it.
+    [
+      ['task t', 't --> zz', 'task u @{ marker: loop', 'task zz "Z"', 'task v $'],
+      /^BPMN error at line 5, column 12: .* is never closed/,
     ],
     // A block closed further down runs on.
     [['task t @{', '  marker: loop', '}'], /^BPMN error at line 3, column 12: .* runs on/],

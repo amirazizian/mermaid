@@ -358,10 +358,11 @@ has syntax here.
 
 ## What the parser refuses
 
-Only one error is reported, the one written first, and the diagram is replaced by the error
-diagram. There are ten kinds. Every message names the line and the column of the statement it
-refuses, or of the attribute key it refuses, except that a lexing error also lists the
-character range. The line is a line of what you wrote: front
+Only one error is reported, and the diagram is replaced by the error diagram: a word or a
+statement that cannot be read, if there is one, and otherwise the first written of the errors
+below it. There are eleven kinds. Every message names the line and the column of the statement
+it refuses, or of the attribute key or the attribute block it refuses, except that a lexing
+error also lists the character range. The line is a line of what you wrote: front
 matter, directives and `%%` comments written before the diagram are counted. The character range
 is counted in the text the parser reads, which has no front matter and no directives.
 
@@ -414,12 +415,24 @@ BPMN error at line N, column C: marker takes loop, parallel, sequential, ad-hoc 
 BPMN error at line N, column C: a user call calls a global user task, so it cannot call a process. Drop user to call a process, or calls: process to call the task.
 ```
 
-The column is that of the key the message is about.
+The column is that of the key the message is about. An element that takes no attributes is
+refused at the block:
+
+```txt
+BPMN error at line N, column C: a start event takes no attributes.
+```
+
+**An attribute block that cannot be read.** The block is read as a YAML flow mapping, and the
+message gives YAML's reason:
+
+```txt
+BPMN error at line N, column C: the attributes @{ marker: [ } cannot be read (missed comma between flow collection entries). Write them as key: value pairs separated by commas.
+```
 
 **An attribute block that is not closed on its line.** An element's attributes are written on
 its own line, between `@{` and `}`; a `}` inside a quoted value does not close the block, and a
 double-quoted value can hold an escaped quote (`"a\"b"`). The block ends with its line, so this
-error comes before anything written after it, and after an error written before it. The block
+error comes before any error written after it, and after an error written before it. The block
 runs on when a later line closes it; otherwise it is never closed:
 
 ```txt
