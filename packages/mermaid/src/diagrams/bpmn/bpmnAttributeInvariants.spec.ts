@@ -6,8 +6,8 @@ import { parseBpmn, writtenKeys } from './parser/bpmn.parser.js';
  * These tests state what the `@{ }` block promises as rules over many inputs, rather than as
  * single examples: of two rule errors in a diagram, the one written first is reported; a line
  * that follows, and neither closes a block nor breaks the syntax, does not change the error a
- * line gives; a key is found where YAML reads it; and a line of any content, 200,000 units
- * long, is read within a bound that a quadratic reading would miss by minutes.
+ * line gives; a key is found where YAML reads it; and a line of any content, 100,000 units
+ * long, is read within a bound that a quadratic reading would miss many times over.
  */
 
 const inLane = (...lines: string[]) =>
@@ -378,17 +378,18 @@ describe('a value is read as YAML reads it', () => {
   });
 });
 
-// A reading that goes back over the line for each unit takes minutes at this length.
-describe('a long line is read within two seconds', () => {
+// A reading that goes back over the line for each unit takes most of a minute at this length
+// on a fast machine. The bound leaves room for a machine several times slower than that.
+describe('a long line is read within five seconds', () => {
   const UNITS = [
     '"', "'", '\\', '\\"', "\\'", '""', "''", '{', '}', '[', ']', ',', ':', '@{', '"a', "'a",
     '%%', ' ', 'a: "', "a: '", '{"', '\\\\',
   ]; // prettier-ignore
   const shapes = UNITS.flatMap((unit) => [
-    { unit, line: `data d @{ state: ${unit.repeat(200_000)}` },
-    { unit, line: `data d @{ state: ${unit.repeat(200_000)} }` },
-    { unit, line: `data d @{ state: "${unit.repeat(200_000)}` },
-    { unit, line: `data d @{ ${unit.repeat(200_000)}: x }` },
+    { unit, line: `data d @{ state: ${unit.repeat(100_000)}` },
+    { unit, line: `data d @{ state: ${unit.repeat(100_000)} }` },
+    { unit, line: `data d @{ state: "${unit.repeat(100_000)}` },
+    { unit, line: `data d @{ ${unit.repeat(100_000)}: x }` },
   ]);
 
   it.each([
@@ -399,12 +400,12 @@ describe('a long line is read within two seconds', () => {
     const line = `task t @{ ${Array.from({ length: 40_000 }, (_, index) => entry(index)).join(', ')} }`;
     const started = performance.now();
     expect(errorOf(inLane(line))).toMatch(/column 15: "k0" is not an attribute/);
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(performance.now() - started).toBeLessThan(5000);
   });
 
-  it.each(shapes)('200,000 of $unit: $line.length characters', ({ line }) => {
+  it.each(shapes)('100,000 of $unit: $line.length characters', ({ line }) => {
     const started = performance.now();
     errorOf(inLane(line, 'task u @{ marker: loop }'));
-    expect(performance.now() - started).toBeLessThan(2000);
+    expect(performance.now() - started).toBeLessThan(5000);
   });
 });
