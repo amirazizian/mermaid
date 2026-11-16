@@ -456,6 +456,116 @@ describe('element attributes', () => {
     expect(message!.length).toBeLessThan(400);
   });
 
+  it.each([
+    'task t @{ marker: &a [*a] }',
+    'data d @{ state: &a [*a] }',
+    'xor g @{ marker: &a [*a] }',
+    'call c @{ calls: &a {x: *a} }',
+  ])('refuses a value that holds itself, with a located error: %s', (line) => {
+    expect(() => parseBpmn(inLane(line))).toThrow(/^BPMN error at line 3, column \d+: .* takes /);
+  });
+
+  it('refuses a value that aliases multiply, quickly and in a short message', () => {
+    const lists = Array.from(
+      { length: 30 },
+      (_, k) =>
+        `&a${k} [${Array(10)
+          .fill(k ? `*a${k - 1}` : 'x')
+          .join(',')}]`
+    );
+    const started = performance.now();
+    let message = '';
+    try {
+      parseBpmn(inLane(`data d @{ state: [${lists.join(', ')}] }`));
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(message).toMatch(
+      /^BPMN error at line 3, column 15: state takes a name without brackets/
+    );
+    expect(message.length).toBeLessThan(400);
+  });
+
+  it('shows a long key and a long value shortened in the message', () => {
+    const long = 'x'.repeat(100_000);
+    for (const line of [`task t @{ ${long}: 1 }`, `task t @{ marker: ${long} }`]) {
+      let message = '';
+      try {
+        parseBpmn(inLane(line));
+      } catch (error) {
+        message = (error as Error).message;
+      }
+      expect(message).toMatch(/^BPMN error at line 3, column \d+: /);
+      expect(message.length).toBeLessThan(400);
+    }
+  });
+
+  it.each([
+    // The id of an undeclared flow end is a word on a later line of a block that runs on.
+    [['task t', 't --> process', 'call u @{ marker: loop,', '  calls: process }'], 4, 5],
+    [['task t', 't --> loop', 'task u @{', '  marker: loop', '}'], 4, 5],
+    [['task t', 't --> loop', 'task u @{', '  "marker": loop', '}'], 4, 5],
+    [
+      ['data p0 @{ state: ok }', 'p0 --> loop', 'task p0', 'task u @{', '  marker: loop', '}'],
+      4,
+      5,
+    ],
+  ])('reports the flow written before a block that runs on: %j', (lines, line, column) => {
+    expect(() => parseBpmn(inLane(...lines))).toThrow(
+      new RegExp(`^BPMN error at line ${line}, column ${column}: the flow `)
+    );
+  });
+
+  it('does not report a flow whose end a line taken by the block may declare', () => {
+    expect(() => parseBpmn(inLane('task t', 't --> u', 'task v @{', '  task u', '}'))).toThrow(
+      /^BPMN error at line 5, column 12: .* runs on/
+    );
+  });
+
+  it('reads the ids after an open block in linear time', () => {
+    const started = performance.now();
+    expect(() => parseBpmn(inLane('task u @{ marker: loop', 'a '.repeat(100_000)))).toThrow();
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  it.each(['"abc }', '"abc } ', '"abc }\t', '"abc } %% note', "'abc } ", "'abc } %% note"])(
+    'refuses an open quote for the quote, whatever follows the }: %j',
+    (value) => {
+      expect(() => parseBpmn(inLane(`data d @{ state: ${value}`))).toThrow(
+        /^BPMN error at line 3, column 12: .* cannot be read \(unexpected end of the stream within a (double|single) quoted scalar\)/
+      );
+    }
+  );
+
+  it('reads a tag written in full, and a ? key inside a list', () => {
+    expect(
+      parsed(inLane('data d @{ state: !<tag:yaml.org,2002:str> "a}b" }')).get('d')?.state
+    ).toBe('a}b');
+    expect(() => parseBpmn(inLane('task t @{ marker: [ ? "a}b" : 1 ] }'))).toThrow(
+      /^BPMN error at line 3, column 15: marker takes .*, not {"a}b":1}\./
+    );
+  });
+
+  it('names a tagged key as YAML does, and points at it', () => {
+    expect(() => parseBpmn(inLane('task t @{ marker: loop, !!str 0x10: x }'))).toThrow(
+      /^BPMN error at line 3, column 35: "0x10" is not an attribute/
+    );
+  });
+
+  it.each([
+    ['!!float 1.0', '1'],
+    ['!!int 7', '7'],
+  ])('takes the tagged number %s as the state', (written, state) => {
+    expect(parsed(inLane(`data d @{ state: ${written} }`)).get('d')?.state).toBe(state);
+  });
+
+  it('names an event-gateway once', () => {
+    expect(() => parseBpmn(inLane('event-gateway g @{ marker: none }'))).toThrow(
+      'an event-gateway takes no attributes.'
+    );
+  });
+
   it('refuses a block on a lane, which takes nothing yet', () => {
     expect(() => parseBpmn('bpmn-beta LR\n  lane l "L" @{ multiple: true }')).toThrow(
       'a lane takes no attributes'

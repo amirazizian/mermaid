@@ -361,8 +361,9 @@ has syntax here.
 Only one error is reported, and the diagram is replaced by the error diagram: a word or a
 statement that cannot be read, if there is one, and otherwise the first written of the errors
 below it. There are eleven kinds. Every message names the line and the column of the statement
-it refuses, or of the attribute key or the attribute block it refuses, except that a lexing
-error also lists the character range. The line is a line of what you wrote: front
+it refuses, or of the word in it that is refused (the trigger, the repeated id, the id a flow
+starts from, the attribute key or the attribute block), except that a lexing error also lists
+the character range. The line is a line of what you wrote: front
 matter, directives and `%%` comments written before the diagram are counted. The character range
 is counted in the text the parser reads, which has no front matter and no directives.
 
@@ -433,7 +434,8 @@ BPMN error at line N, column C: the attributes @{ marker: [ } cannot be read (mi
 its own line, between `@{` and `}`; a `}` inside a quoted value does not close the block, and a
 double-quoted value can hold an escaped quote (`"a\"b"`). The block ends with its line, so this
 error comes before any error written after it, and after an error written before it. The block
-runs on when a later line closes it; otherwise it is never closed:
+runs on when a later line closes it, before any `%%` comment or other `@{`; otherwise it is
+never closed:
 
 ```txt
 BPMN error at line N, column C: the attributes block opened here is never closed. Close it with } on the same line.

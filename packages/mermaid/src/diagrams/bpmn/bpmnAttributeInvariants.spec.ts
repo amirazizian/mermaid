@@ -6,8 +6,9 @@ import { parseBpmn, writtenKeys } from './parser/bpmn.parser.js';
  * These tests state what the `@{ }` block promises as rules over many inputs, rather than as
  * single examples: of two rule errors in a diagram, the one written first is reported; a line
  * that follows, and neither closes a block nor breaks the syntax, does not change the error a
- * line gives; a key is found where YAML reads it; and a line of any content, 100,000 units
- * long, is read within a bound that a quadratic reading would miss many times over.
+ * line gives; the keys found are the keys YAML reads, and stand where they are written; and a
+ * block of 100,000 repeats of a quote, a bracket or a separator is read within a bound that a
+ * quadratic reading would miss many times over.
  */
 
 const inLane = (...lines: string[]) =>
@@ -220,7 +221,7 @@ describe('a line with an error of its own, written after, does not change the er
   });
 });
 
-describe('a key is found where YAML reads it', () => {
+describe('the keys found are the keys YAML reads', () => {
   const random = seeded(8167);
   const bodies = Array.from({ length: 4000 }, () => randomBody(random));
 
@@ -378,9 +379,9 @@ describe('a value is read as YAML reads it', () => {
   });
 });
 
-// A reading that goes back over the line for each unit takes most of a minute at this length
+// A reading that goes back over the block for each unit takes most of a minute at these lengths
 // on a fast machine. The bound leaves room for a machine several times slower than that.
-describe('a long line is read within five seconds', () => {
+describe('a long block is read within five seconds', () => {
   const UNITS = [
     '"', "'", '\\', '\\"', "\\'", '""', "''", '{', '}', '[', ']', ',', ':', '@{', '"a', "'a",
     '%%', ' ', 'a: "', "a: '", '{"', '\\\\',
@@ -396,8 +397,8 @@ describe('a long line is read within five seconds', () => {
     ['plain', (index: number) => `k${index}: 1`],
     ['quoted', (index: number) => `"k${index}": 1`],
     ['listed', (index: number) => `k${index}: [a, "b"]`],
-  ])('a block of 40,000 %s keys', (_, entry) => {
-    const line = `task t @{ ${Array.from({ length: 40_000 }, (_, index) => entry(index)).join(', ')} }`;
+  ])('a block of 100,000 %s keys', (_, entry) => {
+    const line = `task t @{ ${Array.from({ length: 100_000 }, (_, index) => entry(index)).join(', ')} }`;
     const started = performance.now();
     expect(errorOf(inLane(line))).toMatch(/column 15: "k0" is not an attribute/);
     expect(performance.now() - started).toBeLessThan(5000);

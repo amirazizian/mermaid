@@ -617,7 +617,9 @@ const describe = (node: ParsedNode): string => {
     case 'event':
       return `${articleFor(node.keyword)} ${node.keyword} event`;
     case 'gateway':
-      return `${articleFor(node.keyword)} ${node.keyword} gateway`;
+      return node.keyword === 'event-gateway'
+        ? 'an event-gateway'
+        : `${articleFor(node.keyword)} ${node.keyword} gateway`;
     case 'data':
       return node.qualifier ? `a data-${node.qualifier}` : 'a data object';
     case 'store':
@@ -644,7 +646,10 @@ const YAML_WORDS = new Set([
   'NULL',
 ]);
 
-/** A key as YAML names it in a flow mapping, so that `"2"`, `'2'` and `2` all name the key `2`. */
+/**
+ * A key as YAML names it in a flow mapping, so that `"2"`, `'2'` and `2` all name the key `2`.
+ * `written` is the key with any tag or anchor in front of it.
+ */
 function keyName(written: string): string {
   if (PLAIN_KEY.test(written) && !YAML_WORDS.has(written)) {
     return written;
@@ -666,18 +671,62 @@ export function writtenKeys(image: string): WrittenKey[] {
   }));
 }
 
+/** The `}` that ends a line, with nothing after it but blanks and a comment. */
+const CLOSING_BRACE = /}[\t ]*(?:%%.*)?$/;
+
 /**
  * Whether a block's text ends where the block closes. A block whose last quote is left open is
- * taken as closed when it ends in `}`, so that it is refused for the quote, not for the `}`.
+ * taken as closed when its line ends in `}`, so that it is refused for the quote, not for the `}`.
  */
 function isClosed(image: string): boolean {
   const scanned = scanAttributeBlock(image, 0);
-  return scanned.closed || (scanned.openQuote && image.endsWith('}'));
+  return scanned.closed || (scanned.openQuote && CLOSING_BRACE.test(image));
 }
 
-/** A block as a message shows it: whole, unless it is long. */
+/** What a block holds between `@{` and its `}`. */
+const insideOf = (image: string): string =>
+  scanAttributeBlock(image, 0).closed
+    ? image.slice(2, -1)
+    : image.slice(2).replace(CLOSING_BRACE, '');
+
+/** A block, a key or a value as a message shows it: whole, unless it is long. */
 const shown = (image: string): string =>
   image.length > 80 ? `${image.slice(0, 60)} … ${image.slice(-15)}` : image;
+
+/**
+ * A value as a message shows it, the way JSON writes it. A long value is cut short, and so is
+ * one that holds itself, which YAML's anchors and aliases can write.
+ */
+function shownValue(value: unknown): string {
+  let room = 80;
+  const show = (part: unknown, depth: number): string => {
+    if (part === null || typeof part !== 'object') {
+      const text = shown(JSON.stringify(part) ?? String(part));
+      room -= text.length;
+      return text;
+    }
+    if (depth > 3) {
+      room -= 1;
+      return '…';
+    }
+    const parts: string[] = [];
+    const entries: [string | undefined, unknown][] = Array.isArray(part)
+      ? part.map((entry) => [undefined, entry])
+      : Object.entries(part);
+    for (const [name, entry] of entries) {
+      if (room <= 0) {
+        parts.push('…');
+        break;
+      }
+      const label = name === undefined ? '' : `${shown(JSON.stringify(name))}:`;
+      room -= label.length + 1;
+      parts.push(label + show(entry, depth + 1));
+    }
+    room -= 2;
+    return Array.isArray(part) ? `[${parts.join(',')}]` : `{${parts.join(',')}}`;
+  };
+  return show(value, 0);
+}
 
 /** Reads the inside of `@{ ... }` as a YAML flow mapping. */
 function readAttributes(token: IToken): WrittenAttributes | UnreadableAttributes {
@@ -690,7 +739,7 @@ function readAttributes(token: IToken): WrittenAttributes | UnreadableAttributes
   });
   let values: unknown;
   try {
-    values = yaml.load(`{${image.slice(2, -1)}}`, { schema: yaml.JSON_SCHEMA });
+    values = yaml.load(`{${insideOf(image)}}`, { schema: yaml.JSON_SCHEMA });
   } catch (error) {
     return unreadable(` (${error instanceof yaml.YAMLException ? error.reason : String(error)})`);
   }
@@ -707,13 +756,16 @@ function readAttributes(token: IToken): WrittenAttributes | UnreadableAttributes
   return { values: values as Record<string, unknown>, keys, offsets, at, image };
 }
 
-/** A value as it is written, where YAML would read a number: `1.0` stays `1.0`, not `1`. */
-function asWritten(written: WrittenAttributes, key: string): unknown {
+/**
+ * A number as it is written: `1.0` stays `1.0`, not `1`. Where the block cannot be read without
+ * its types (it holds a tag such as `!!float`), the number is given as YAML reads it.
+ */
+function asWritten(written: WrittenAttributes, key: string, value: number): unknown {
   try {
-    const read = yaml.load(`{${written.image.slice(2, -1)}}`, { schema: yaml.FAILSAFE_SCHEMA });
+    const read = yaml.load(`{${insideOf(written.image)}}`, { schema: yaml.FAILSAFE_SCHEMA });
     return (read as Record<string, unknown>)[key];
   } catch {
-    return undefined;
+    return String(value);
   }
 }
 
@@ -735,7 +787,7 @@ function applyActivityMarkers(node: ParsedNode, value: unknown, where: string): 
   for (const marker of markers) {
     if (typeof marker !== 'string' || !known.includes(marker)) {
       throw new Error(
-        `${where}: marker takes ${listOf([...known])}, or a list of them, not ${JSON.stringify(marker)}.`
+        `${where}: marker takes ${listOf([...known])}, or a list of them, not ${shownValue(marker)}.`
       );
     }
     if (seen.has(marker)) {
@@ -816,12 +868,12 @@ function applyAttributes(node: ParsedNode): void {
   for (const [key, value] of entriesInWrittenOrder(written)) {
     if (!allowed.includes(key)) {
       throw new Error(
-        `BPMN error${atText(keyLocation(written, key))}: "${key}" is not an attribute of ${describe(node)}, which takes ${listOf([...allowed])}.`
+        `BPMN error${atText(keyLocation(written, key))}: "${shown(key)}" is not an attribute of ${describe(node)}, which takes ${listOf([...allowed])}.`
       );
     }
     const where = `BPMN error${atText(keyLocation(written, key))}`;
     const wrongValue = (expected: string) =>
-      new Error(`${where}: ${key} takes ${expected}, not ${JSON.stringify(value)}.`);
+      new Error(`${where}: ${key} takes ${expected}, not ${shownValue(value)}.`);
     switch (key) {
       case 'multiple':
         if (!isBoolean(value)) {
@@ -850,7 +902,7 @@ function applyAttributes(node: ParsedNode): void {
         }
         break;
       case 'state': {
-        const state = typeof value === 'number' ? asWritten(written, key) : value;
+        const state = typeof value === 'number' ? asWritten(written, key, value) : value;
         if (typeof state !== 'string' || !state.trim() || /[[\]]/.test(state)) {
           throw wrongValue('a name without brackets');
         }
@@ -969,27 +1021,44 @@ const FLOW_TOKENS: ReadonlySet<unknown> = new Set([
 ]);
 
 /**
- * The ids that `text` may declare: the names on its lines that are not flows. The text need
- * not be readable as a diagram; what cannot be lexed is skipped.
+ * The ids that `text` may declare: the names on its lines that open with a keyword, as every
+ * element does, and are not flows. A line that opens with a name or with quoted text declares
+ * nothing: it is a flow, or the `key: value` of a block that runs on. The text need not be
+ * readable as a diagram; what cannot be lexed is skipped.
  */
 function idsDeclaredIn(text: string): Set<string> {
   const names = new Map<number, string[]>();
-  const flowLines = new Set<number>();
+  const skipped = new Set<number>();
+  const begun = new Set<number>();
   for (const token of bpmnLexer.tokenize(text).tokens) {
     const line = token.startLine ?? 0;
-    if (FLOW_TOKENS.has(token.tokenType)) {
-      flowLines.add(line);
+    if (token.tokenType === t.Indent || token.tokenType === t.Newline) {
+      continue;
+    }
+    const opensLine = !begun.has(line);
+    begun.add(line);
+    if (
+      FLOW_TOKENS.has(token.tokenType) ||
+      (opensLine && (token.tokenType === t.Identifier || token.tokenType === t.QuotedString))
+    ) {
+      skipped.add(line);
     } else if (token.tokenType === t.Identifier) {
-      names.set(line, [...(names.get(line) ?? []), token.image]);
+      const ids = names.get(line);
+      if (ids) {
+        ids.push(token.image);
+      } else {
+        names.set(line, [token.image]);
+      }
     }
   }
-  return new Set([...names].flatMap(([line, ids]) => (flowLines.has(line) ? [] : ids)));
+  return new Set([...names].flatMap(([line, ids]) => (skipped.has(line) ? [] : ids)));
 }
 
 /**
  * Refuses a block that is not closed on its line. An error written before the block comes
  * first: a syntax error, or one of the diagram's rules, which are checked on the text with
- * the block blanked out.
+ * the block blanked out. A flow before the block is not held to be undeclared when a line
+ * the block takes, or one that cannot be read, may declare the element it ends at.
  */
 function refuseUnclosedBlock(config: ParseConfig, input: string, block: IToken): never {
   const blockEnd = block.startOffset + block.image.length;

@@ -1,12 +1,14 @@
 /**
  * Reads the text of an element's `@{ key: value, ... }` block the way YAML reads a flow mapping,
  * far enough to know where the block ends and where its keys are written. Scalars, quoted
- * text, lists, mappings, tags and anchors are followed; an alias or a list written as a key is
- * not, which at worst places an error at the start of the block.
+ * text, lists, mappings, tags and anchors are followed. An alias or a list written as a key is
+ * not: an error about such a key is placed at the start of the block, and quoted text that
+ * follows an alias key without a space (`*a :"x}y"`) is read as plain text.
  *
  * The lexer and the parser both use this one reading. The lexer takes the block's extent from
  * it, and the parser takes the place of each key, so the two cannot come to disagree about
- * where a quoted value ends or which `}` closes the block. Every character is read once.
+ * where a quoted value ends or which `}` closes the block. The reading takes time in proportion
+ * to the length of the block.
  */
 
 /** A key at the top of a block: its text as written, and where it starts, counted from the `@`. */
@@ -35,6 +37,17 @@ const isWordChar = (char: string | undefined): boolean => char !== undefined && 
 /** Whether the word that starts at `index` (a tag or an anchor) ends in a space on its line. */
 const endsWithSpace = (text: string, index: number): boolean => {
   let end = index;
+  if (text.startsWith('!<', index)) {
+    // A tag written in full, `!<tag:yaml.org,2002:str>`, may hold a comma.
+    while (
+      end < text.length &&
+      text[end] !== '>' &&
+      !isSpace(text[end]) &&
+      !isLineBreak(text[end])
+    ) {
+      end++;
+    }
+  }
   while (end < text.length && !isSpace(text[end]) && !isLineBreak(text[end])) {
     if (isFlowIndicator(text[end])) {
       return false;
@@ -97,6 +110,10 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
   // Whether a scalar may start here: nothing but spaces since the last indicator.
   let atStart = true;
   let afterQuoted = false;
+  // Whether an entry of the block, or of a list or a mapping in it, starts here.
+  let entryStart = true;
+  // Where the tag or the anchor in front of the key that is about to be read starts.
+  let prefixStart: number | undefined;
   let firstLine = true;
   let index = start + 2;
   const stopped = (openQuote = false): ScannedBlock => ({
@@ -126,13 +143,17 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
     const wasQuoted = afterQuoted;
     afterQuoted = false;
     const topLevelKey = expectingKey && open.length === 0;
+    const startsEntry = entryStart;
+    entryStart = false;
+    const keyStart = prefixStart ?? index;
+    prefixStart = undefined;
 
     // On a line after the first, which may be a statement of its own, a quote opens quoted
     // text wherever it stands, as it does in a label; the apostrophe in `it's` does not.
     if ((atStart || (!firstLine && !isApostrophe(text, index))) && isQuote(char)) {
       const quoted = quotedEnd(text, index);
       if (topLevelKey) {
-        keys.push({ text: text.slice(index, quoted.end), offset: index - start });
+        keys.push({ text: text.slice(keyStart, quoted.end), offset: index - start });
         expectingKey = false;
       }
       index = quoted.end;
@@ -145,6 +166,7 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
       open.push(char);
       expectingKey = false;
       atStart = true;
+      entryStart = true;
       index++;
     } else if (char === ']') {
       if (open[open.length - 1] === '[') {
@@ -166,6 +188,7 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
     } else if (char === ',') {
       expectingKey ||= open.length === 0;
       atStart = true;
+      entryStart = true;
       index++;
     } else if (char === ':' && (wasQuoted || separates(text, index))) {
       if (topLevelKey) {
@@ -175,12 +198,15 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
       }
       atStart = true;
       index++;
-    } else if (atStart && topLevelKey && char === '?' && separates(text, index)) {
-      // `? key : value`, the long way to write a key.
+    } else if (atStart && startsEntry && char === '?' && separates(text, index)) {
+      // `? key : value`, the long way to write a key, in the block or in a mapping inside it.
       index++;
     } else if (atStart && (char === '!' || char === '&') && endsWithSpace(text, index)) {
       // A tag (`!!str`) or an anchor (`&name`) stands in front of a key or a value, which
-      // starts after it.
+      // starts after it and is named together with it.
+      if (topLevelKey) {
+        prefixStart = keyStart;
+      }
       while (index < text.length && !isSpace(text[index])) {
         index++;
       }
@@ -197,7 +223,7 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
         end++;
       }
       if (atStart && topLevelKey) {
-        keys.push({ text: text.slice(index, end).trimEnd(), offset: index - start });
+        keys.push({ text: text.slice(keyStart, end).trimEnd(), offset: index - start });
         expectingKey = false;
       }
       atStart = false;
