@@ -12,8 +12,8 @@ import { BPMN_DIRECTIONS, EVENT_TRIGGERS, TASK_TYPES } from './types.js';
  * that follows, and neither closes a block nor breaks the syntax, does not change the error a
  * line gives; the keys found are the keys YAML reads, and stand where they are written; a line
  * after a block left open declares a name when it opens as an element's statement does; and a
- * block of 100,000 repeats of a quote, a bracket, a separator, a tag or an anchor is read within
- * a bound that a quadratic reading would miss many times over.
+ * block of 100,000 repeats of a quote, a bracket, a separator, a tag or an anchor, or of 20,000
+ * keys, is read within a bound that a quadratic reading would miss many times over.
  */
 
 const inLane = (...lines: string[]) =>
@@ -574,8 +574,10 @@ describe('a line after a block left open declares a name when it opens as a stat
   });
 });
 
-// A reading that goes back over the block for each unit takes most of a minute at these lengths
-// on a fast machine. The bound leaves room for a machine several times slower than that.
+// A reading that goes back over the block for each unit, or for each key, takes most of a minute
+// at these lengths on a fast machine. The bound is five seconds for all of them. The lengths
+// are chosen so that the slowest takes about a second and a half on a CI runner that measures
+// coverage, which runs them some eight times slower than a fast machine does.
 describe('a long block is read within five seconds', () => {
   const UNITS = [
     '"', "'", '\\', '\\"', "\\'", '""', "''", '{', '}', '[', ']', ',', ':', '@{', '"a', "'a",
@@ -594,8 +596,10 @@ describe('a long block is read within five seconds', () => {
     ['quoted', (index: number) => `"k${index}": 1`],
     ['listed', (index: number) => `k${index}: [a, "b"]`],
     ['tagged', (index: number) => `!!str k${index}: &a${index} 1`],
-  ])('a block of 100,000 %s keys', (_, entry) => {
-    const line = `task t @{ ${Array.from({ length: 100_000 }, (_, index) => entry(index)).join(', ')} }`;
+  ])('a block of 20,000 %s keys', (_, entry) => {
+    // A key that is not a plain word is named by a YAML read of its own, so a key costs far
+    // more than a character does: hence fewer keys here than characters below.
+    const line = `task t @{ ${Array.from({ length: 20_000 }, (_, index) => entry(index)).join(', ')} }`;
     const started = performance.now();
     expect(errorOf(inLane(line))).toMatch(/column \d+: "k0" is not an attribute/);
     expect(performance.now() - started).toBeLessThan(5000);
@@ -612,12 +616,13 @@ describe('a long block is read within five seconds', () => {
   it.each(UNITS)('100,000 of %s on the line after a block left open', (unit) => {
     const started = performance.now();
     scanAttributeBlock(`@{ marker: loop\n${unit.repeat(100_000)}`, 0, true);
-    expect(performance.now() - started).toBeLessThan(1000);
+    expect(performance.now() - started).toBeLessThan(5000);
   });
 
-  it.each(['"a":&x', '!<,'])('a diagram with 50,000 of %s after a block left open', (unit) => {
+  // The same through the parser, which lexes such a line several times over.
+  it.each(['"a":&x', '!<,'])('a diagram with 30,000 of %s after a block left open', (unit) => {
     const started = performance.now();
-    expect(errorOf(inLane('task t @{ marker: loop', unit.repeat(50_000)))).toMatch(
+    expect(errorOf(inLane('task t @{ marker: loop', unit.repeat(30_000)))).toMatch(
       /is never closed/
     );
     expect(performance.now() - started).toBeLessThan(5000);

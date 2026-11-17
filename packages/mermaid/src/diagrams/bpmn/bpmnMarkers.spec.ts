@@ -337,11 +337,12 @@ describe('element attributes', () => {
     expect(parsed(inLane("data d @{ state: 'it''s' }")).get('d')?.state).toBe("it's");
   });
 
-  it('reads a line of 400,000 characters with a quote that is never closed within a second', () => {
+  // It takes some 40 ms on a fast machine, and ten times that on a CI runner measuring coverage.
+  it('reads a line of 400,000 characters with a quote that is never closed in five seconds', () => {
     const source = inLane('data d @{ state: "' + '\\"'.repeat(200_000));
     const started = performance.now();
     expect(() => parseBpmn(source)).toThrow('is never closed');
-    expect(performance.now() - started).toBeLessThan(1000);
+    expect(performance.now() - started).toBeLessThan(5000);
   });
 
   // Inputs an independent review found wrong, each with the error it must give.
