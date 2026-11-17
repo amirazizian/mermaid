@@ -1,0 +1,15 @@
+bpmn-beta LR
+title Unmarked gateway, data state and participant multiplicity
+  pool buyer "Buyer"
+    lane "Purchasing"
+      start s1 "Need"
+      data d1 "Order" @{ state: draft }
+      task t1 "Prepare order"
+      data d2 "Order" @{ state: approved }
+      xor g1 "Urgent?" @{ marker: none }
+      end e1 "Sent"
+  pool suppliers "Suppliers" @{ multiple: true }
+  s1 --> t1 --> g1 --> e1
+  d1 ..> t1
+  t1 ..> d2
+  t1 -.-> suppliers

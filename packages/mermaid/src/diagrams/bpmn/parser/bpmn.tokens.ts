@@ -1,6 +1,7 @@
 import { createToken, Lexer } from 'chevrotain';
 import type { CustomPatternMatcherFunc, TokenType } from 'chevrotain';
 import { BPMN_DIRECTIONS, EVENT_TRIGGERS, TASK_TYPES } from '../types.js';
+import { scanAttributeBlock } from './bpmnAttributeBlock.js';
 
 const asMatch = (image: string, offset: number, text: string): RegExpExecArray => {
   const match = [image] as unknown as RegExpExecArray;
@@ -123,6 +124,28 @@ export const AccDescr = createToken({ name: 'AccDescr', pattern: /accDescr[\t ]*
 
 export const QuotedString = createToken({ name: 'QuotedString', pattern: /"[^\n\r"]*"/ });
 
+/**
+ * A trailing `@{ key: value, ... }` block of element attributes, on one line. Its contents
+ * are read as a YAML flow mapping, like the `@{ }` of flowchart and kanban, but on one line.
+ *
+ * Where the block ends is not a regular language (a quote opens quoted text only where a key or
+ * a value starts, and a `}` may close a mapping nested in the block), so the token is matched by
+ * `scanAttributeBlock`, which the parser also uses to find the block's keys. The token stops at
+ * the end of its line, closed or not, so the parser can refuse an unclosed block with a BPMN
+ * error that names where it opened, before anything written after it.
+ */
+const matchAttributes: CustomPatternMatcherFunc = (text, offset) =>
+  text.startsWith('@{', offset)
+    ? asMatch(text.slice(offset, scanAttributeBlock(text, offset).end), offset, text)
+    : null;
+
+export const Attributes = createToken({
+  name: 'Attributes',
+  pattern: matchAttributes,
+  line_breaks: false,
+  start_chars_hint: ['@'],
+});
+
 export const LabelledArrow = createToken({
   name: 'LabelledArrow',
   pattern: /--(?![>-])[^\n\r]*?--+>/,
@@ -149,6 +172,7 @@ export const bpmnTokens: TokenType[] = [
   AccDescrMultiline,
   AccDescr,
   QuotedString,
+  Attributes,
   Header,
   Direction,
   Pool,

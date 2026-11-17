@@ -39,6 +39,7 @@ interface Drawn {
   rings: number;
   glyphs: number;
   icons: number;
+  markers: number;
   stroke: number;
   classes: string[];
 }
@@ -47,7 +48,14 @@ const drawnById = async (page: Page): Promise<Record<string, Drawn>> =>
   page.evaluate(() => {
     const out: Record<
       string,
-      { rings: number; glyphs: number; icons: number; stroke: number; classes: string[] }
+      {
+        rings: number;
+        glyphs: number;
+        icons: number;
+        markers: number;
+        stroke: number;
+        classes: string[];
+      }
     > = {};
     // A node's DOM id is the diagram's own id and then the id the source declared.
     const svgId = document.querySelector('svg[aria-roledescription]')?.getAttribute('id') ?? '';
@@ -58,6 +66,7 @@ const drawnById = async (page: Page): Promise<Record<string, Drawn>> =>
         rings: node.querySelectorAll('circle.bpmn-event-ring').length,
         glyphs: node.querySelectorAll('.bpmn-glyph').length,
         icons: node.querySelectorAll('.bpmn-activity-icon').length,
+        markers: node.querySelectorAll('.bpmn-activity-markers > g').length,
         stroke: Number.parseFloat(
           getComputedStyle(node.querySelector('rect.bpmn-activity-rect') ?? node).strokeWidth
         ),
@@ -136,11 +145,13 @@ test.describe('bpmn-beta elements', () => {
       expect(drawn[id], `${id} should be drawn`).toBeDefined();
       expect(drawn[id].rings, `${id} is not an event`).toBe(0);
     }
-    // A plain task carries no mark. A sub-process is marked with one; a call activity is
-    // not, and is told apart by a thicker border, which is what the notation draws.
-    expect(drawn.plain.icons).toBe(0);
-    expect(drawn.sub.icons).toBe(1);
-    expect(drawn.called.icons).toBe(0);
+    // A plain task carries no mark. A sub-process is marked with a + on its bottom edge,
+    // where BPMN 2.0.2 draws it; a call activity is not, and is told apart by a thicker
+    // border, which is what the notation draws.
+    expect(drawn.plain.icons + drawn.plain.markers).toBe(0);
+    expect(drawn.sub.icons).toBe(0);
+    expect(drawn.sub.markers).toBe(1);
+    expect(drawn.called.icons + drawn.called.markers).toBe(0);
     expect(drawn.called.stroke).toBeGreaterThan(drawn.plain.stroke);
   });
 

@@ -222,6 +222,9 @@ const getStyles = (options: BpmnStyleOptions) => {
   .pool.cluster rect.pool-body {
     fill: none;
   }
+  .cluster path.participant-multiplicity {
+    stroke: ${laneStroke};
+  }
   .cluster text,
   .cluster-label text {
     fill: ${laneLabelColor};
