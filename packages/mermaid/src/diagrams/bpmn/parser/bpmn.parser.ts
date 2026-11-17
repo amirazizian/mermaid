@@ -1076,10 +1076,10 @@ const BLANKS = /^[\t ]*$/;
 
 /**
  * The ids that `text` may declare: on each of its lines that opens as an element's statement
- * does, the name that statement gives. Such a line opens with a keyword, which a task type may
- * come before and, on an event, a trigger may follow; the name comes next. Nothing but blanks
- * may stand before or between these words. What follows the name is not looked at, so `text`
- * need not be readable as a diagram.
+ * does, the name that statement gives. Such a line opens with a keyword and the name comes
+ * next; a task type may stand before the keyword of an activity, and a trigger after the
+ * keyword of an event. Nothing but blanks may stand before or between these words. What
+ * follows the name is not looked at, so `text` need not be readable as a diagram.
  */
 function idsDeclaredIn(text: string): Set<string> {
   const ids = new Set<string>();

@@ -254,7 +254,8 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
       nodeStart = true;
       index++;
     } else if (wasEntryStart && char === '?' && endsWord(text, index + 1)) {
-      // `? key : value`, the long way to write a key, in the block or in a mapping inside it.
+      // `? key : value`, the long way to write a key, in the block or in a list or a mapping
+      // inside it.
       index++;
     } else if (nodeStart && char === '!') {
       // A tag (`!!str`) stands in front of a key or a value, which may start straight after it.
@@ -268,7 +269,7 @@ export function scanAttributeBlock(text: string, start: number, acrossLines = fa
       index = nameEnd(text, index + 1, firstLine);
       // A `:` straight after the name is part of it: to YAML `*a: x` is the alias `a:` and
       // then a text it cannot read. What follows such a `:` is still read as a value is, so
-      // that the block ends where its author ended it and is refused whole, for the alias.
+      // that the block ends where its author ended it, and is refused as a whole.
       nodeStart = text[index - 1] === ':';
       afterNode = true;
     } else {

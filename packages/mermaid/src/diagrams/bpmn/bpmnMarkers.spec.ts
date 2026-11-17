@@ -564,7 +564,7 @@ describe('element attributes', () => {
   });
 
   it.each(['"abc } x', '"abc', '"abc } "', "'abc }} x"])(
-    'refuses an open quote as a block that is never closed when no } ends its line: %j',
+    'refuses a block as never closed when its line does not end in a }: %j',
     (value) => {
       expect(() => parseBpmn(inLane(`data d @{ state: ${value}`))).toThrow(
         /^BPMN error at line 3, column 12: the attributes block opened here is never closed/
