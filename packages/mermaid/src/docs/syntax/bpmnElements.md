@@ -292,12 +292,14 @@ has syntax here.
 
 Only one error is reported, and the diagram is replaced by the error diagram: a word or a
 statement that cannot be read, if there is one, and otherwise the first written of the errors
-below it. There are eleven kinds. Every message names the line and the column of the statement
-it refuses, or of the word in it that is refused (the trigger, the repeated id, the id a flow
-starts from, the attribute key or the attribute block), except that a lexing error also lists
-the character range. The line is a line of what you wrote: front
-matter, directives and `%%` comments written before the diagram are counted. The character range
-is counted in the text the parser reads, which has no front matter and no directives.
+below it. An attribute block left open on its line is the exception: nothing written after it
+is reported, a word or a statement that cannot be read included. There are eleven kinds. Every
+message names the line and the column of the statement it refuses, or of the word in it that is
+refused (the trigger, the repeated id, the id a flow starts from, the attribute key or the
+attribute block), except that a lexing error also lists the character range. The line is a line
+of what you wrote: front matter, directives and `%%` comments written before the diagram are
+counted. The character range is counted in the text the parser reads, which has no front matter
+and no directives.
 
 **A word it cannot read.** `Error lexing bpmn diagram: ... at line N, column C [start,end)`
 

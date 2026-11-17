@@ -489,7 +489,14 @@ describe('element attributes', () => {
 
   it('shows a long key and a long value shortened in the message', () => {
     const long = 'x'.repeat(100_000);
-    for (const line of [`task t @{ ${long}: 1 }`, `task t @{ marker: ${long} }`]) {
+    for (const line of [
+      `task t @{ ${long}: 1 }`,
+      `task t @{ marker: ${long} }`,
+      // YAML's reason for not reading a block may quote a name in it.
+      `task t @{ marker: *${long} }`,
+      `task t @{ marker: !${long} x }`,
+      `task t @{ marker: !<${long}> x }`,
+    ]) {
       let message = '';
       try {
         parseBpmn(inLane(line));
@@ -511,17 +518,27 @@ describe('element attributes', () => {
       4,
       5,
     ],
+    // A later line of the block opens with a word the syntax keeps, and declares nothing.
+    [['task t', 't --> loop', 'subprocess u @{ marker: [', '  compensation, loop ] }'], 4, 5],
+    [['task t', 't --> x', 'pool u @{', '  multiple: true, x: 1 }'], 4, 5],
+    [['task t', 't --> x', 'xor u @{ marker:', '  none, x: y }'], 4, 5],
+    [['task t', 't --> marker', 'call u @{ calls:', '  task, marker: process }'], 4, 5],
+    [['task t', 't --> zz', 'task u @{', '  LR: zz }'], 4, 5],
+    [['task t', 't --> v', 'task u @{', '  - task v }'], 4, 5],
   ])('reports the flow written before a block that runs on: %j', (lines, line, column) => {
     expect(() => parseBpmn(inLane(...lines))).toThrow(
       new RegExp(`^BPMN error at line ${line}, column ${column}: the flow `)
     );
   });
 
-  it('does not report a flow whose end a line taken by the block may declare', () => {
-    expect(() => parseBpmn(inLane('task t', 't --> u', 'task v @{', '  task u', '}'))).toThrow(
-      /^BPMN error at line 5, column 12: .* runs on/
-    );
-  });
+  it.each(['task u', 'user task u "U"', 'end terminate u', 'data-store u }', '\ttask\tu'])(
+    'does not report a flow whose end a line taken by the block declares: %j',
+    (declaration) => {
+      expect(() =>
+        parseBpmn(inLane('task t', 't --> u', 'task v @{', `  ${declaration}`, '}'))
+      ).toThrow(/^BPMN error at line 5, column 12: .* runs on/);
+    }
+  );
 
   it('reads the ids after an open block in linear time', () => {
     const started = performance.now();
@@ -529,11 +546,28 @@ describe('element attributes', () => {
     expect(performance.now() - started).toBeLessThan(5000);
   });
 
-  it.each(['"abc }', '"abc } ', '"abc }\t', '"abc } %% note', "'abc } ", "'abc } %% note"])(
-    'refuses an open quote for the quote, whatever follows the }: %j',
+  it.each([
+    '"abc }',
+    '"abc } ',
+    '"abc }\t',
+    '"abc } %% note',
+    "'abc } ",
+    "'abc } %% note",
+    // A line separator is no line break to the parser, so the comment goes on after it.
+    '"abc } %% a\u2028b',
+    '"abc } %% a } %% b',
+    'ok, x: "abc }',
+  ])('refuses an open quote for the quote when blanks or a comment follow the }: %j', (value) => {
+    expect(() => parseBpmn(inLane(`data d @{ state: ${value}`))).toThrow(
+      /^BPMN error at line 3, column 12: .* cannot be read \(unexpected end of the stream within a (double|single) quoted scalar\)/s
+    );
+  });
+
+  it.each(['"abc } x', '"abc', '"abc } "', "'abc }} x"])(
+    'refuses an open quote as a block that is never closed when no } ends its line: %j',
     (value) => {
       expect(() => parseBpmn(inLane(`data d @{ state: ${value}`))).toThrow(
-        /^BPMN error at line 3, column 12: .* cannot be read \(unexpected end of the stream within a (double|single) quoted scalar\)/
+        /^BPMN error at line 3, column 12: the attributes block opened here is never closed/
       );
     }
   );
@@ -542,6 +576,10 @@ describe('element attributes', () => {
     expect(
       parsed(inLane('data d @{ state: !<tag:yaml.org,2002:str> "a}b" }')).get('d')?.state
     ).toBe('a}b');
+    // Quoted text may follow the tag's `>` with no blank between them.
+    expect(parsed(inLane('data d @{ state: !<tag:yaml.org,2002:str>"a}b" }')).get('d')?.state).toBe(
+      'a}b'
+    );
     expect(() => parseBpmn(inLane('task t @{ marker: [ ? "a}b" : 1 ] }'))).toThrow(
       /^BPMN error at line 3, column 15: marker takes .*, not {"a}b":1}\./
     );
@@ -550,6 +588,57 @@ describe('element attributes', () => {
   it('names a tagged key as YAML does, and points at it', () => {
     expect(() => parseBpmn(inLane('task t @{ marker: loop, !!str 0x10: x }'))).toThrow(
       /^BPMN error at line 3, column 35: "0x10" is not an attribute/
+    );
+    expect(() => parseBpmn(inLane('task t @{ !<tag:yaml.org,2002:str>marker: bogus }'))).toThrow(
+      /^BPMN error at line 3, column 39: marker takes/
+    );
+  });
+
+  it.each([
+    // A key that is nothing but a tag, a `?` or an anchor stands where that is written.
+    ['task t @{ marker: loop, !!str : a }', 29, ''],
+    ['task t @{ marker: loop, ? }', 29, 'null'],
+    ['task t @{ marker: loop, ? : a }', 29, 'null'],
+    ['task t @{ marker: loop, &2, 0: x }', 29, 'null'],
+    ['task t @{ marker: loop, &2, colour: x }', 29, 'null'],
+    ['task t @{ marker: loop, &a : x }', 29, 'null'],
+    // A list or a mapping written as a key stands where it opens.
+    ['task t @{ marker: loop, [colour]: red }', 29, 'colour'],
+    ['task t @{ marker: loop, [a, b]: red }', 29, 'a,b'],
+    ['task t @{ marker: loop, {a: 1}: red }', 29, '\\[object Object\\]'],
+    ['task t @{ marker: loop, ? [colour] : red }', 31, 'colour'],
+  ])('names and places the key of `%s`', (line, column, name) => {
+    expect(() => parseBpmn(inLane(line))).toThrow(
+      new RegExp(`^BPMN error at line 3, column ${column}: "${name}" is not an attribute`)
+    );
+  });
+
+  it('places a key written with an alias at the block, after the other keys', () => {
+    expect(() => parseBpmn(inLane('data d @{ state: &a ok, *a : x, colour: red }'))).toThrow(
+      /^BPMN error at line 3, column 37: "colour" is not an attribute/
+    );
+    expect(() => parseBpmn(inLane('data d @{ state: &a ok, *a :"x}y" }'))).toThrow(
+      /^BPMN error at line 3, column 12: "ok" is not an attribute/
+    );
+  });
+
+  it('refuses a block that holds a # comment, which would hide its } from YAML', () => {
+    expect(() => parseBpmn(inLane('data d @{ state: a #b }'))).toThrow(
+      /^BPMN error at line 3, column 12: .* cannot be read \(unexpected end of the stream within a flow collection\)/
+    );
+    // A `#` inside a word, or in quoted text, is no comment.
+    expect(parsed(inLane('data d @{ state: a#b }')).get('d')?.state).toBe('a#b');
+    expect(parsed(inLane('data d @{ state: "a #b" }')).get('d')?.state).toBe('a #b');
+  });
+
+  it.each([
+    ['.inf', '.inf'],
+    ['-.inf', '-.inf'],
+    ['.nan', '.nan'],
+    ['[loop, .NaN]', '.nan'],
+  ])('shows the number %s as YAML writes it', (value, shown) => {
+    expect(() => parseBpmn(inLane(`task t @{ marker: ${value} }`))).toThrow(
+      `or a list of them, not ${shown}.`
     );
   });
 

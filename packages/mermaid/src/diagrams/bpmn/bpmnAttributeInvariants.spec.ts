@@ -1,14 +1,19 @@
 import { describe, it, expect } from 'vitest';
+import { Alternation, Terminal } from 'chevrotain';
+import type { IProduction } from 'chevrotain';
 import * as yaml from 'js-yaml';
-import { parseBpmn, writtenKeys } from './parser/bpmn.parser.js';
+import { bpmnParser, parseBpmn, writtenKeys } from './parser/bpmn.parser.js';
+import { scanAttributeBlock } from './parser/bpmnAttributeBlock.js';
+import { BPMN_DIRECTIONS, EVENT_TRIGGERS, TASK_TYPES } from './types.js';
 
 /**
  * These tests state what the `@{ }` block promises as rules over many inputs, rather than as
  * single examples: of two rule errors in a diagram, the one written first is reported; a line
  * that follows, and neither closes a block nor breaks the syntax, does not change the error a
- * line gives; the keys found are the keys YAML reads, and stand where they are written; and a
- * block of 100,000 repeats of a quote, a bracket or a separator is read within a bound that a
- * quadratic reading would miss many times over.
+ * line gives; the keys found are the keys YAML reads, and stand where they are written; a line
+ * after a block left open declares a name when it opens as an element's statement does; and a
+ * block of 100,000 repeats of a quote, a bracket, a separator, a tag or an anchor is read within
+ * a bound that a quadratic reading would miss many times over.
  */
 
 const inLane = (...lines: string[]) =>
@@ -181,6 +186,7 @@ describe('of two errors, the one written first is reported, unless the second is
 const PIECES = [
   '"', "'", '\\', '{', '}', '[', ']', ',', ':', ': ', ' ', '@{', '%%', '#', '?', '&', '*', '!',
   '-', 'a', 'x', '2', 'marker', 'loop', 'state', 'none', 'true', 'null', '"a"', "'b'", '\t',
+  '? ', '!!str ', '&a ', '*a', '*a ', '!<tag:yaml.org,2002:str>', '!<!>', '"a}b"', ' : ', '>',
 ]; // prettier-ignore
 
 const randomBody = (random: () => number): string => {
@@ -221,82 +227,151 @@ describe('a line with an error of its own, written after, does not change the er
   });
 });
 
-describe('the keys found are the keys YAML reads', () => {
-  const random = seeded(8167);
-  const bodies = Array.from({ length: 4000 }, () => randomBody(random));
+/**
+ * The flow mapping YAML reads at the front of `text`, which opens with `{`, and where it ends.
+ * The mapping ends at the first `}` up to which the text can be read as a mapping. It is read
+ * as the one entry of a list, where a `}` that does not end the mapping cannot be read at all.
+ */
+const flowMappingAt = (text: string): { end: number; read: object } | undefined => {
+  for (let brace = text.indexOf('}'); brace >= 0; brace = text.indexOf('}', brace + 1)) {
+    try {
+      const read = yaml.load(`[${text.slice(0, brace + 1)}]`, { schema: yaml.JSON_SCHEMA });
+      const [mapping] = read as unknown[];
+      if ((read as unknown[]).length === 1 && mapping && typeof mapping === 'object') {
+        return { end: brace + 1, read: mapping };
+      }
+    } catch {
+      // Not the end of the mapping.
+    }
+  }
+  return undefined;
+};
 
-  it('finds the keys YAML reads, in those of 4000 generated blocks that YAML can read', () => {
+describe('a block ends where YAML ends it, and its keys are the keys YAML reads', () => {
+  const random = seeded(8167);
+  const bodies = Array.from({ length: 20_000 }, () => randomBody(random));
+
+  it('holds for those of 20,000 generated blocks that YAML can read', () => {
     let readable = 0;
+    let endingEarly = 0;
+    let withTagOrAnchor = 0;
     for (const body of bodies) {
-      let read: unknown;
-      try {
-        read = yaml.load(`{${body}}`, { schema: yaml.JSON_SCHEMA });
-      } catch {
+      const mapping = flowMappingAt(`{${body}}`);
+      if (!mapping) {
         continue;
       }
-      if (!read || typeof read !== 'object' || Array.isArray(read)) {
-        continue;
-      }
-      readable++;
       const image = `@{${body}}`;
-      const found = writtenKeys(image);
       const where = `for the block ${JSON.stringify(image)}`;
-      // Every key found is one YAML reads, and stands where the scan says it does. Blocks
-      // with a tag, an anchor, an alias or a `?` key are left out of this check: the pieces
-      // put them together at random, mostly in ways the scan does not follow.
-      const plain = !/[!&*?]/.test(body);
-      for (const { key, offset } of found) {
-        if (plain) {
-          expect(Object.keys(read), where).toContain(key);
+      // The block ends with the `}` that YAML ends the mapping with, which may come before the
+      // end of what was generated.
+      const scanned = scanAttributeBlock(image, 0);
+      expect({ closed: scanned.closed, end: scanned.end }, where).toEqual({
+        closed: true,
+        end: mapping.end + 1,
+      });
+      readable++;
+      endingEarly += scanned.end < image.length ? 1 : 0;
+      withTagOrAnchor += /[!&?]/.test(body) ? 1 : 0;
+      const found = writtenKeys(image.slice(0, scanned.end));
+      const names = found.map((entry) => entry.key);
+      if (body.includes('*')) {
+        // A key written with an alias has no name of its own, so it is not found. Every key
+        // that is found is still one YAML reads.
+        for (const name of names) {
+          expect(Object.keys(mapping.read), where).toContain(name);
         }
-        expect(offset, where).toBeGreaterThanOrEqual(2);
-        expect(image[offset], where).not.toMatch(/[\s,{}]/);
+      } else {
+        expect([...names].sort(), where).toEqual(Object.keys(mapping.read).sort());
       }
-      // Every key YAML reads from a plain or quoted scalar is found. A list or a mapping
-      // written as a key is not followed; the blocks built below cover those as values.
-      for (const key of !plain || /[[{]/.test(body) ? [] : Object.keys(read)) {
-        if (!/^[\w-]+$/.test(key) || key === 'null') {
-          continue;
-        }
-        expect(
-          found.map((entry) => entry.key),
-          where
-        ).toContain(key);
-      }
+      // Each key stands after the one before it, on something that is written.
       const offsets = found.map((entry) => entry.offset);
       expect(
-        [...offsets].sort((a, b) => a - b),
+        [...new Set(offsets)].sort((a, b) => a - b),
         where
       ).toEqual(offsets);
+      for (const offset of offsets) {
+        expect(offset, where).toBeGreaterThanOrEqual(2);
+        expect(image[offset], where).not.toMatch(/[\t ,}]/);
+      }
     }
-    expect(readable).toBeGreaterThan(1000);
+    expect(readable).toBeGreaterThan(5000);
+    expect(endingEarly).toBeGreaterThan(500);
+    expect(withTagOrAnchor).toBeGreaterThan(500);
   });
 });
 
 describe('a key is found where it is written', () => {
-  // How a key is written, and the name YAML gives it.
-  const KEYS: [string, string][] = [
-    ['marker', 'marker'], ['"state"', 'state'], ["'calls'", 'calls'], ['2', '2'], ['"a b"', 'a b'],
-    ['"q\\"k"', 'q"k'], ["'it''s'", "it's"], ['ad-hoc', 'ad-hoc'], ['true', 'true'], ['"x: y"', 'x: y'],
-    ['"a,b"', 'a,b'], ['"}"', '}'], ["'{'", '{'], ['k.1', 'k.1'],
-  ]; // prettier-ignore
+  /**
+   * How a key is written, the name YAML gives it, and where in what is written the key itself
+   * starts: after a `?`, a tag or an anchor in front of it. `bare` marks a key that is nothing
+   * but a `?`, a tag or an anchor, which a blank must follow.
+   */
+  interface WrittenKey {
+    written: string;
+    name: string;
+    at?: number;
+    bare?: boolean;
+  }
+  const KEYS: WrittenKey[] = [
+    { written: 'marker', name: 'marker' },
+    { written: '"state"', name: 'state' },
+    { written: "'calls'", name: 'calls' },
+    { written: '2', name: '2' },
+    { written: '"a b"', name: 'a b' },
+    { written: '"q\\"k"', name: 'q"k' },
+    { written: "'it''s'", name: "it's" },
+    { written: 'ad-hoc', name: 'ad-hoc' },
+    { written: 'true', name: 'true' },
+    { written: '"x: y"', name: 'x: y' },
+    { written: '"a,b"', name: 'a,b' },
+    { written: '"}"', name: '}' },
+    { written: "'{'", name: '{' },
+    { written: 'k.1', name: 'k.1' },
+    { written: 'a:b', name: 'a:b' },
+    { written: '-x', name: '-x' },
+    // A tag or an anchor in front of the key, which the key is named without.
+    { written: '!!str 0x10', name: '0x10', at: 6 },
+    { written: '!!str "t}g"', name: 't}g', at: 6 },
+    { written: '&k anchored', name: 'anchored', at: 3 },
+    { written: '&k !!str both', name: 'both', at: 9 },
+    { written: '!<tag:yaml.org,2002:str> full', name: 'full', at: 25 },
+    { written: '!<tag:yaml.org,2002:str>"n}s"', name: 'n}s', at: 24 },
+    { written: '!<!>near', name: 'near', at: 4 },
+    { written: '!!int 7', name: '7', at: 6 },
+    // The long way to write a key.
+    { written: '? asked', name: 'asked', at: 2 },
+    { written: '? "q}k"', name: 'q}k', at: 2 },
+    { written: '?  !!str long', name: 'long', at: 9 },
+    // A list or a mapping written as a key.
+    { written: '[l, m]', name: 'l,m' },
+    { written: '[ "}" ]', name: '}' },
+    { written: '{ in: "}" }', name: '[object Object]' },
+    { written: '&c [n]', name: 'n', at: 3 },
+    // A key that is nothing but a tag, an anchor or a `?`.
+    { written: '!!str', name: '', bare: true },
+    { written: '&only', name: 'null', bare: true },
+    { written: '?', name: 'null', bare: true },
+    { written: '', name: 'null', bare: true },
+  ];
   const VALUES = [
     'loop', '1', 'true', '""', "''", '"a, foo: b"', "'a, foo: b'", '"a\\"}"', "'a\\'", "'it''s, k: v'",
     '[a, b]', '[ "x, y: z", c ]', '{ in: 1, ner: 2 }', '{ a: [1, { b: "}" }] }', '"{"', "'['",
-    '"\\\\"', 'a b c', 'null', '', '"]"', '[[], {}]',
+    '"\\\\"', 'a b c', 'null', '', '"]"', '[[], {}]', '!!str "a}b, c: d"', '&v [1, "}"]',
+    '!<tag:yaml.org,2002:str>"a}b"', '!!str ', '[ ? "a}b" : 1 ]', '{ ? x : "}" }', "it's", 'a"b',
   ]; // prettier-ignore
   const SEPARATORS = [', ', ',', ' , ', ',  '];
   const random = seeded(8160);
   const pick = <T>(items: T[]): T => items[Math.floor(random() * items.length)];
 
-  it('holds for 3000 blocks built from keys and values of every shape', () => {
-    for (let run = 0; run < 3000; run++) {
+  it('holds for 5000 blocks built from keys and values of every shape', () => {
+    const used = new Set<string>();
+    for (let run = 0; run < 5000; run++) {
       let image = `@{${pick(['', ' ', '  '])}`;
       const expected: { key: string; offset: number }[] = [];
       const names = new Set<string>();
       const count = 1 + Math.floor(random() * 4);
       for (let index = 0; index < count; index++) {
-        const [written, name] = pick(KEYS);
+        const { written, name, at = 0, bare = false } = pick(KEYS);
         if (names.has(name)) {
           continue;
         }
@@ -304,15 +379,28 @@ describe('a key is found where it is written', () => {
           image += pick(SEPARATORS);
         }
         names.add(name);
-        expected.push({ key: name, offset: image.length });
-        image += `${written}${pick([': ', ' : ', ':  '])}${pick(VALUES)}`;
+        used.add(written);
+        // A key written as nothing at all stands where its `:` does, and needs it to be a key.
+        expected.push({ key: name, offset: image.length + (written === '' ? 1 : at) });
+        image += written;
+        if (written === '' || random() < 0.85) {
+          // A `:` straight after a tag or an anchor would be part of it.
+          const colon = bare ? [' : ', ' :  '] : [': ', ' : ', ':  '];
+          image += `${pick(colon)}${pick(VALUES)}`;
+        } else if (bare) {
+          // A key with no value. A blank ends the tag, the anchor or the `?` it is.
+          image += ' ';
+        }
       }
       image += `${pick(['', ' '])}}`;
       const where = `for the block ${JSON.stringify(image)}`;
-      const read = yaml.load(image.slice(1), { schema: yaml.JSON_SCHEMA }) as object;
-      expect(Object.keys(read).sort(), where).toEqual([...names].sort());
+      const mapping = flowMappingAt(image.slice(1));
+      expect(mapping?.end, where).toBe(image.length - 1);
+      expect(Object.keys(mapping?.read ?? {}).sort(), where).toEqual([...names].sort());
       expect(writtenKeys(image), where).toEqual(expected);
+      expect(scanAttributeBlock(image, 0).end, where).toBe(image.length);
     }
+    expect(used.size).toBe(KEYS.length);
   });
 });
 
@@ -322,6 +410,10 @@ describe('a value is read as YAML reads it', () => {
     ['&x "a}b"', 'a}b'],
     ["!!str 'a}b'", 'a}b'],
     ['!!str plain', 'plain'],
+    ['!<tag:yaml.org,2002:str> "a}b"', 'a}b'],
+    ['!<tag:yaml.org,2002:str>"a}b"', 'a}b'],
+    ['!<!>"a}b"', 'a}b'],
+    ['&x !!str "a}b"', 'a}b'],
   ])('state: %s, behind a tag or an anchor', (value, state) => {
     const node = parseBpmn(inLane(`data d @{ state: ${value} } %% note`)).nodes.find(
       (n) => n.id === 'd'
@@ -331,8 +423,11 @@ describe('a value is read as YAML reads it', () => {
 
   it.each([
     ['task t @{ !!str "a}b": 1 }', /column 21: "a}b" is not an attribute/],
-    ['task t @{ [a]:"x}y" }', /column 12: "a" is not an attribute/],
+    ['task t @{ [a]:"x}y" }', /column 15: "a" is not an attribute/],
     ['task t @{ marker: {a: 1}:"x}y" }', /cannot be read|marker takes/],
+    // A key written with an alias is named by what it stands for, and placed at the block.
+    ['data d @{ state: &a ok, *a :"x}y" }', /column 12: "ok" is not an attribute/],
+    ['task t @{ marker: &a loop, [*a]:"x}y" }', /column 12: "loop" is not an attribute/],
   ])('reads `%s` to its end', (line, message) => {
     expect(errorOf(inLane(line, 'end timer after'))).toMatch(message);
     expect(lineOf(errorOf(inLane(line, 'end timer after'))!)).toBe(3);
@@ -379,12 +474,113 @@ describe('a value is read as YAML reads it', () => {
   });
 });
 
+/**
+ * The keywords the grammar lets open an element's statement: the words of the choice each of
+ * its element rules starts with. They are read from the grammar, so that a keyword added to it
+ * is tested here without being listed again.
+ */
+const elementKeywords = (): string[] => {
+  const words = (production: IProduction): string[] =>
+    production instanceof Terminal
+      ? [(production.terminalType.PATTERN as RegExp).source.replaceAll('\\', '')]
+      : ((production as { definition?: IProduction[] }).definition ?? []).flatMap(words);
+  const rules = bpmnParser.getGAstProductions();
+  return ['container', 'event', 'gateway', 'activity', 'artifact'].flatMap((rule) =>
+    words(rules[rule].definition.find((production) => production instanceof Alternation)!)
+  );
+};
+
+describe('a line after a block left open declares a name when it opens as a statement does', () => {
+  const flowError = /^BPMN error at line 4, column 5: the flow "t --> zz" refers to "zz"/;
+  const blockError = /^BPMN error at line 5, column 12: the attributes block opened here/;
+  /** The error for a flow to `zz` written before a block that `next` follows. */
+  const errorsWith = (next: string): (string | undefined)[] => [
+    // The block runs on, and `next` is the line that closes it.
+    errorOf(inLane('task t', 't --> zz', 'task u @{', `${next} }`)),
+    // The block is never closed, and what follows `next` cannot be read.
+    errorOf(inLane('task t', 't --> zz', 'task u @{ marker: loop', next, 'task v $')),
+  ];
+
+  const keywords = elementKeywords();
+
+  it('reads the keywords from the grammar', () => {
+    expect(keywords).toEqual(
+      expect.arrayContaining(['pool', 'start', 'end', 'xor', 'task', 'call', 'data-store', 'note'])
+    );
+  });
+
+  it.each(keywords)('`%s zz` declares zz', (keyword) => {
+    for (const message of errorsWith(`${keyword} zz`)) {
+      expect(message).toMatch(blockError);
+    }
+    for (const message of errorsWith(`  ${keyword}\tzz "Z"`)) {
+      expect(message).toMatch(blockError);
+    }
+  });
+
+  it.each(TASK_TYPES.flatMap((type) => ['task', 'subprocess', 'call'].map((kind) => [type, kind])))(
+    '`%s %s zz` declares zz',
+    (type, kind) => {
+      for (const message of errorsWith(`${type} ${kind} zz`)) {
+        expect(message).toMatch(blockError);
+      }
+    }
+  );
+
+  it.each(
+    ['start', 'intermediate', 'boundary', 'end', 'throw'].flatMap((event) =>
+      EVENT_TRIGGERS.map((trigger) => [event, trigger])
+    )
+  )('`%s %s zz` declares zz', (event, trigger) => {
+    for (const message of errorsWith(`${event} ${trigger} zz`)) {
+      expect(message).toMatch(blockError);
+    }
+  });
+
+  // Lines that name zz without declaring it: the flow to it is reported.
+  it.each([
+    ...EVENT_TRIGGERS.map((trigger) => `${trigger} zz`),
+    ...TASK_TYPES.map((type) => `${type} zz`),
+    ...BPMN_DIRECTIONS.map((direction) => `${direction} zz`),
+    ...EVENT_TRIGGERS.map((trigger) => `task ${trigger} zz`),
+    ...TASK_TYPES.map((type) => `${type} xor zz`),
+    'zz',
+    'zz: 1',
+    'marker: zz',
+    'state: task zz',
+    'compensation, zz ]',
+    'none, zz: y',
+    'multiple: true, zz: 1',
+    'task, zz: process',
+    'task: zz',
+    'task "T" zz',
+    'task t2 zz',
+    '- task zz',
+    '"task" zz',
+    'x task zz',
+    'tasks zz',
+    'task-x zz',
+    'user, task zz',
+    'end timer, zz',
+    'end timer timer zz',
+    'zz --> t',
+    't --> zz',
+    'title zz',
+    'accTitle: zz',
+  ])('`%s` does not declare zz', (next) => {
+    for (const message of errorsWith(next)) {
+      expect(message).toMatch(flowError);
+    }
+  });
+});
+
 // A reading that goes back over the block for each unit takes most of a minute at these lengths
 // on a fast machine. The bound leaves room for a machine several times slower than that.
 describe('a long block is read within five seconds', () => {
   const UNITS = [
     '"', "'", '\\', '\\"', "\\'", '""', "''", '{', '}', '[', ']', ',', ':', '@{', '"a', "'a",
-    '%%', ' ', 'a: "', "a: '", '{"', '\\\\',
+    '%%', ' ', 'a: "', "a: '", '{"', '\\\\', '!', '!<', '!<,', '!<a>', '!!str ', '&', '&a ', '*',
+    '*a ', '?', '? ', '"a":&x', '"a":!<', '}%%', '>', '#',
   ]; // prettier-ignore
   const shapes = UNITS.flatMap((unit) => [
     { unit, line: `data d @{ state: ${unit.repeat(100_000)}` },
@@ -397,16 +593,42 @@ describe('a long block is read within five seconds', () => {
     ['plain', (index: number) => `k${index}: 1`],
     ['quoted', (index: number) => `"k${index}": 1`],
     ['listed', (index: number) => `k${index}: [a, "b"]`],
+    ['tagged', (index: number) => `!!str k${index}: &a${index} 1`],
   ])('a block of 100,000 %s keys', (_, entry) => {
     const line = `task t @{ ${Array.from({ length: 100_000 }, (_, index) => entry(index)).join(', ')} }`;
     const started = performance.now();
-    expect(errorOf(inLane(line))).toMatch(/column 15: "k0" is not an attribute/);
+    expect(errorOf(inLane(line))).toMatch(/column \d+: "k0" is not an attribute/);
     expect(performance.now() - started).toBeLessThan(5000);
   });
 
   it.each(shapes)('100,000 of $unit: $line.length characters', ({ line }) => {
     const started = performance.now();
     errorOf(inLane(line, 'task u @{ marker: loop }'));
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  // The lines after a block left open are read on, to find whether one of them closes it. That
+  // reading takes a few milliseconds at this length, and took minutes when it was quadratic.
+  it.each(UNITS)('100,000 of %s on the line after a block left open', (unit) => {
+    const started = performance.now();
+    scanAttributeBlock(`@{ marker: loop\n${unit.repeat(100_000)}`, 0, true);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  it.each(['"a":&x', '!<,'])('a diagram with 50,000 of %s after a block left open', (unit) => {
+    const started = performance.now();
+    expect(errorOf(inLane('task t @{ marker: loop', unit.repeat(50_000)))).toMatch(
+      /is never closed/
+    );
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+
+  // A line separator is no line break here, so it stands inside the block's text.
+  it.each(['\u2028', '\u2029'])('100,000 of }%%%% before the separator %j', (separator) => {
+    const started = performance.now();
+    expect(errorOf(inLane(`data d @{ state: "${'}%%'.repeat(100_000)}${separator}`))).toMatch(
+      /cannot be read \(unexpected end of the stream within a double quoted scalar\)/
+    );
     expect(performance.now() - started).toBeLessThan(5000);
   });
 });

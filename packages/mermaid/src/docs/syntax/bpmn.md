@@ -206,15 +206,15 @@ bpmn-beta LR
 ## Attributes
 
 Anything about an element that is not its kind, its id or its label is written in a trailing
-`@{ }` block, the same form flowcharts and kanban boards use. The block holds `key: value`
-pairs separated by commas, and an element only accepts the keys listed for it:
+`@{ }` block, the form flowcharts and kanban boards use, kept on one line. The block holds
+`key: value` pairs separated by commas, and an element only accepts the keys listed for it:
 
 | Element                                                | Attribute  | Values                                                                                          |
 | ------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------- |
 | `task`, `subprocess`, `call`                           | `marker`   | `loop`, `parallel`, `sequential`, `compensation`, or a list of them; `ad-hoc` on a `subprocess` |
 | `call`                                                 | `calls`    | `task` (the default) or `process`, drawn with a `+`                                             |
 | `xor`                                                  | `marker`   | `none` draws it without its X                                                                   |
-| `data`, `data-input`, `data-output`, `data-collection` | `state`    | a name, drawn in brackets under the label, or alone without one                                 |
+| `data`, `data-input`, `data-output`, `data-collection` | `state`    | a name, drawn in brackets under the label, or alone when there is no label and no id            |
 | `pool`                                                 | `multiple` | `true` draws the participant multiplicity marker                                                |
 
 ```mermaid-example
