@@ -52,10 +52,18 @@ describe('endpointProfile vertex', () => {
 });
 
 describe('endpointProfile oneLinePerVertex', () => {
+  /** Shapes above, below and right of the node, so only its left vertex has a clear way. */
+  const walls = [
+    { id: 'above', x: 100, y: 72, width: 200, height: 24, metadata: { endpointProfile: 'flat' } },
+    { id: 'below', x: 100, y: 128, width: 200, height: 24, metadata: { endpointProfile: 'flat' } },
+  ];
   const ends = (metadata: Record<string, unknown>) => {
     const first = arriving('e1', { x: 40, y: 100 }, { x: 60, y: 100 }, CENTRE);
     const second = arriving('e2', { x: 40, y: 100 }, { x: 60, y: 100 }, CENTRE);
-    meetDiamondsAtTheirVertex([first, second], new Map([['n', node(metadata)]]));
+    meetDiamondsAtTheirVertex(
+      [first, second],
+      new Map<string, any>([['n', node(metadata)], ...walls.map((w) => [w.id, w] as const)])
+    );
     return [lastOf(first), lastOf(second)];
   };
 
@@ -72,19 +80,31 @@ describe('endpointProfile oneLinePerVertex', () => {
 
 describe('endpointProfile captionBelow', () => {
   const BELOW = 80;
-  const endFromBelow = (metadata: Record<string, unknown>) => {
-    const edge = arriving('e', { x: 100, y: 200 }, { x: 100, y: 150 }, CENTRE);
+  /** An edge from below and to the left: in by the left vertex or, with one turn less, the bottom one. */
+  const endFromBelowLeft = (metadata: Record<string, unknown>) => {
+    const edge = arriving('e', { x: 20, y: 170 }, { x: 60, y: 170 }, { x: 60, y: 100 }, CENTRE);
     meetDiamondsAtTheirVertex([edge], new Map([['n', node(metadata, BELOW)]]));
     return lastOf(edge);
   };
 
-  it('keeps edges off the bottom vertex of a node that writes below its shape', () => {
-    const end = endFromBelow({ endpointProfile: 'vertex', captionBelow: true });
-    expect(end).not.toEqual({ x: 100, y: 110 });
+  it('keeps an edge off the bottom vertex of a node that writes below its shape, where another vertex serves nearly as well', () => {
+    expect(endFromBelowLeft({ endpointProfile: 'vertex', captionBelow: true })).toEqual({
+      x: 90,
+      y: 100,
+    });
   });
 
   it('uses the bottom vertex of a node that does not', () => {
-    expect(endFromBelow({ endpointProfile: 'vertex' })).toEqual({ x: 100, y: 110 });
+    expect(endFromBelowLeft({ endpointProfile: 'vertex' })).toEqual({ x: 100, y: 110 });
+  });
+
+  it('uses the bottom vertex of a node that writes below it for an edge from straight below', () => {
+    const edge = arriving('e', { x: 100, y: 200 }, { x: 100, y: 150 }, CENTRE);
+    meetDiamondsAtTheirVertex(
+      [edge],
+      new Map([['n', node({ endpointProfile: 'vertex', captionBelow: true }, BELOW)]])
+    );
+    expect(lastOf(edge)).toEqual({ x: 100, y: 110 });
   });
 });
 

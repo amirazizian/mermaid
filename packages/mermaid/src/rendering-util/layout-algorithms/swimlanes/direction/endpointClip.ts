@@ -11,6 +11,15 @@ import {
 } from './geometry.js';
 import type { Point, RectBounds } from './geometry.js';
 import type { Node } from '../../../types.js';
+import {
+  assignSides,
+  CAPTION_VERTEX_COST,
+  costOfWay,
+  VERTEX_SIDES,
+  VERTEX_STUB,
+  waysFromVertex,
+} from './vertexPorts.js';
+import type { Obstacle, VertexContext, VertexSide, VertexWay } from './vertexPorts.js';
 
 const EPS = 1e-3;
 const INSIDE_EPS = 0.5;
@@ -506,18 +515,13 @@ function dropAxisBacktracks(points: Point[]): Point[] {
   return out;
 }
 
-const VERTEX_SIDES = ['top', 'bottom', 'left', 'right'] as const;
-
-/** How far a line runs out of a vertex that faces away from its route before it turns. */
-const VERTEX_STUB = 12;
-type VertexSide = (typeof VERTEX_SIDES)[number];
-
 /**
  * How a producer wants edges to meet a node, set on `metadata.endpointProfile`:
  * `vertex` for a shape that is pointed where its box is not (an edge ends on the drawn
  * outline), `flat` for one with flat sides an edge should approach squarely.
  * `metadata.oneLinePerVertex` asks that each edge take a vertex of its own, and
- * `metadata.captionBelow` that the bottom vertex is left to a caption written under the shape.
+ * `metadata.captionBelow` that the bottom vertex is left to a caption written under the shape
+ * where another vertex serves nearly as well.
  */
 function endpointProfileOf(node: any): 'vertex' | 'flat' | undefined {
   const profile = node?.metadata?.endpointProfile;
@@ -581,38 +585,95 @@ function writesAQuestionBelow(node: any): boolean {
   );
 }
 
-function preferredSides(node: any, toward: Point): VertexSide[] {
-  const dx = toward.x - (node?.x ?? 0);
-  const dy = toward.y - (node?.y ?? 0);
-  const score: Record<VertexSide, number> = {
-    right: dx,
-    left: -dx,
-    bottom: dy,
-    top: -dy,
-  };
-  if (writesAQuestionBelow(node)) {
-    score.bottom = Number.NEGATIVE_INFINITY;
+/**
+ * The route from `vertex` onto `inward` (an edge's points ordered from the node outward) that
+ * keeps as much of the route as it can: it joins the route where the route first lies beyond the
+ * vertex, or, when none of it does, leaves the vertex by a stub and turns there.
+ */
+function joinRouteAtVertex(vertex: Point, side: VertexSide, inward: Point[]): Point[] {
+  const alongY = side === 'top' || side === 'bottom';
+  const away = side === 'top' || side === 'left' ? -1 : 1;
+  const rest = inward.slice(1);
+  const cleared = rest.findIndex((p) =>
+    alongY ? (p.y - vertex.y) * away > 1e-6 : (p.x - vertex.x) * away > 1e-6
+  );
+  const tail = cleared >= 0 ? rest.slice(cleared) : rest;
+  const first = tail[0] ?? vertex;
+  if (cleared < 0 && tail.length) {
+    // Nothing of the route lies beyond this vertex: the vertex faces away from where the
+    // line goes. Turning at the vertex's own height would run the line back through the
+    // shape, so it first leaves the vertex by a stub and turns there, outside the shape.
+    const stub = alongY
+      ? { x: vertex.x, y: vertex.y + away * VERTEX_STUB }
+      : { x: vertex.x + away * VERTEX_STUB, y: vertex.y };
+    const turn = alongY ? { x: first.x, y: stub.y } : { x: stub.x, y: first.y };
+    return dropAxisBacktracks([vertex, stub, turn, ...tail]);
   }
-  return [...VERTEX_SIDES].sort((a, b) => score[b] - score[a]);
+  const corner = alongY ? { x: vertex.x, y: first.y } : { x: first.x, y: vertex.y };
+  const needsCorner = Math.abs(corner.x - first.x) > 1e-6 || Math.abs(corner.y - first.y) > 1e-6;
+  return dropAxisBacktracks([vertex, ...(needsCorner ? [corner] : []), ...tail]);
 }
 
+interface RoutedEdge {
+  id?: string;
+  points?: Point[];
+  start?: string;
+  end?: string;
+  isLayoutOnly?: boolean;
+}
+
+/**
+ * The shapes and texts a way from a vertex should keep off: each node's drawn shape, the band
+ * under a shape that writes its caption below it, and the edge labels.
+ */
+function obstaclesOf(nodeByIdMap: Map<string, any>): Obstacle[] {
+  const obstacles: Obstacle[] = [];
+  for (const node of nodeByIdMap.values()) {
+    if (!node || node.isGroup || typeof node.x !== 'number' || typeof node.y !== 'number') {
+      continue;
+    }
+    const box = rectOfNodeBounds(node);
+    if (!box) {
+      continue;
+    }
+    const id = String(node.id);
+    if (node.isEdgeLabel) {
+      obstacles.push({ id, text: box });
+      continue;
+    }
+    const shape = endpointRectOf(node) ?? box;
+    const captionBand =
+      box.bottom - shape.bottom > 1
+        ? { left: box.left, right: box.right, top: shape.bottom, bottom: box.bottom }
+        : undefined;
+    obstacles.push({ id, shape, ...(captionBand ? { text: captionBand } : {}) });
+  }
+  return obstacles;
+}
+
+const labelNodeIdOf = (edge: RoutedEdge) => `edge-label-${edge.start}-${edge.end}-${edge.id}`;
+
+/**
+ * Ends each edge on a pointed node at one of the node's drawn vertices: the one from which the
+ * edge's route runs on most simply, with the fewest turns, crossings and texts in its way (see
+ * `vertexPorts.ts`), and joins the route to it.
+ */
 export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<string, any>) {
   interface Contact {
-    edge: { points?: Point[] };
+    edge: RoutedEdge;
     atStart: boolean;
-    neighbour: Point;
     incoming: boolean;
   }
   const byNode = new Map<string, Contact[]>();
+  const routed: RoutedEdge[] = [];
 
   for (const edge of edges) {
-    const candidate = edge as {
-      points?: Point[];
-      start?: string;
-      end?: string;
-      isLayoutOnly?: boolean;
-    };
+    const candidate = edge as RoutedEdge;
     if (candidate.isLayoutOnly || !candidate.points || candidate.points.length < 2) {
+      continue;
+    }
+    routed.push(candidate);
+    if (candidate.start === candidate.end) {
       continue;
     }
     for (const atStart of [true, false]) {
@@ -620,62 +681,87 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
       if (!id || !meetsAtVertices(nodeByIdMap.get(id))) {
         continue;
       }
-      const points = candidate.points;
-      const neighbour = atStart ? points[1] : points[points.length - 2];
-      byNode.set(id, [
-        ...(byNode.get(id) ?? []),
-        { edge: candidate, atStart, neighbour, incoming: !atStart },
-      ]);
+      byNode.set(id, [...(byNode.get(id) ?? []), { edge: candidate, atStart, incoming: !atStart }]);
     }
   }
+  if (byNode.size === 0) {
+    return;
+  }
+  const obstacles = obstaclesOf(nodeByIdMap);
 
   for (const [id, contacts] of byNode) {
     const node = nodeByIdMap.get(id);
-    const taken = new Set<VertexSide>();
-    const ordered = [...contacts].sort((a, b) => Number(b.incoming) - Number(a.incoming));
-
-    for (const contact of ordered) {
-      const prefs = preferredSides(node, contact.neighbour);
-      const side = wantsOneLinePerCorner(node)
-        ? (prefs.find((s) => !taken.has(s)) ?? prefs[0])
-        : prefs[0];
-      taken.add(side);
-      const vertex = vertexOf(node, side);
-      const points = contact.edge.points;
-      if (!vertex || !points || points.length < 2) {
-        continue;
-      }
-      const alongY = side === 'top' || side === 'bottom';
-      const away = side === 'top' || side === 'left' ? -1 : 1;
-
-      const rest = contact.atStart ? points.slice(1) : points.slice(0, -1);
-      const inward = contact.atStart ? rest : [...rest].reverse();
-
-      const cleared = inward.findIndex((p) =>
-        alongY ? (p.y - vertex.y) * away > 1e-6 : (p.x - vertex.x) * away > 1e-6
-      );
-      const tail = cleared >= 0 ? inward.slice(cleared) : inward;
-      const first = tail[0] ?? vertex;
-      let ordered: Point[];
-      if (cleared < 0 && tail.length) {
-        // Nothing of the route lies beyond this vertex: the vertex faces away from where the
-        // line goes, because the vertices facing it are taken. Turning at the vertex's own
-        // height would run the line back through the shape, so it first leaves the vertex by
-        // a stub and turns there, outside the shape.
-        const stub = alongY
-          ? { x: vertex.x, y: vertex.y + away * VERTEX_STUB }
-          : { x: vertex.x + away * VERTEX_STUB, y: vertex.y };
-        const turn = alongY ? { x: first.x, y: stub.y } : { x: stub.x, y: first.y };
-        ordered = [vertex, stub, turn, ...tail];
-      } else {
-        const corner = alongY ? { x: vertex.x, y: first.y } : { x: first.x, y: vertex.y };
-        const needsCorner =
-          Math.abs(corner.x - first.x) > 1e-6 || Math.abs(corner.y - first.y) > 1e-6;
-        ordered = [vertex, ...(needsCorner ? [corner] : []), ...tail];
-      }
-      const joined = contact.atStart ? ordered : [...ordered].reverse();
-      contact.edge.points = dropAxisBacktracks(joined);
+    const ownShape = endpointRectOf(node);
+    if (!ownShape) {
+      continue;
     }
+    const ordered = [...contacts].sort((a, b) => Number(b.incoming) - Number(a.incoming));
+    const here = new Set(ordered.map((c) => c.edge));
+    const captionBelow = writesAQuestionBelow(node);
+    const context: VertexContext = {
+      vertexAt: (side) => vertexOf(node, side),
+      ownShape,
+      obstacles,
+      exempt: (edge) => new Set([String(id), labelNodeIdOf(edge as RoutedEdge)]),
+      textExempt: (edge) => {
+        const e = edge as RoutedEdge;
+        return new Set([String(e.start === id ? e.end : e.start)]);
+      },
+      otherRoutes: (edge) =>
+        routed.filter((e) => e !== edge && !here.has(e) && e.points).map((e) => e.points!),
+      sideCost: (side) => (side === 'bottom' && captionBelow ? CAPTION_VERTEX_COST : 0),
+    };
+
+    const options = ordered.map((contact) => {
+      const points = dedupeConsecutivePoints(contact.edge.points!, EPS);
+      const inward = contact.atStart ? [...points] : [...points].reverse();
+      const farId = contact.atStart ? contact.edge.end : contact.edge.start;
+      const farNode = farId ? nodeByIdMap.get(farId) : undefined;
+      const farRect =
+        farNode && !farNode.isGroup && endpointProfileOf(farNode) === 'flat'
+          ? endpointRectOf(farNode)
+          : undefined;
+      const others = context.otherRoutes(contact.edge);
+      const perSide = new Map<VertexSide, VertexWay>();
+      for (const side of VERTEX_SIDES) {
+        const vertex = context.vertexAt(side);
+        if (!vertex || inward.length < 2) {
+          continue;
+        }
+        const ways = waysFromVertex(
+          vertex,
+          side,
+          inward,
+          farRect,
+          joinRouteAtVertex(vertex, side, inward)
+        );
+        for (const way of ways) {
+          const cost = costOfWay(way, context, contact.edge, others) + context.sideCost(side);
+          const known = perSide.get(side);
+          if (!known || cost < known.cost - 1e-6) {
+            perSide.set(side, { side, points: way, cost });
+          }
+        }
+      }
+      return perSide;
+    });
+
+    const chosen = assignSides(options, wantsOneLinePerCorner(node));
+    ordered.forEach((contact, i) => {
+      const way = chosen[i];
+      if (!way) {
+        return;
+      }
+      // Keep the far end doubled where it was: the renderer reads a doubled end as pinned.
+      const before = contact.edge.points!;
+      const farDoubled = contact.atStart
+        ? before.length > 1 && samePoint(before[before.length - 1], before[before.length - 2], EPS)
+        : before.length > 1 && samePoint(before[0], before[1], EPS);
+      const outward = farDoubled
+        ? [...way.points, { ...way.points[way.points.length - 1] }]
+        : way.points;
+      contact.edge.points = contact.atStart ? outward : [...outward].reverse();
+    });
   }
 }
 
