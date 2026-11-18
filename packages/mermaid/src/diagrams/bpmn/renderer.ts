@@ -95,7 +95,7 @@ function unionBox(parts: SVGGraphicsElement[]): Box | undefined {
     if (own.width === 0 && own.height === 0) {
       continue;
     }
-    const content = part.closest('g.bpmn-subprocess-content');
+    const content = part.closest<SVGGElement>('g.bpmn-subprocess-content');
     const matrix = typeof part.getCTM === 'function' ? part.getCTM() : null;
     const base = content && typeof content.getCTM === 'function' ? content.getCTM() : null;
     const toGroup = matrix && base ? base.inverse().multiply(matrix) : undefined;
