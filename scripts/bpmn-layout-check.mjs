@@ -23,6 +23,9 @@
  *   labelOnBorder     a flow label across a lane or pool border
  *   envelopeOnLine    a message envelope on another flow, a text or a shape
  *   crossing          two flows cross (counted, not always avoidable)
+ *   outsideLane       a shape, or its caption, reaches outside the innermost lane or pool body
+ *                     that holds the shape's centre (association lines are flows like any other
+ *                     and count in the categories above)
  * Exit code 0; the numbers are the result.
  */
 import { readFile, writeFile } from 'node:fs/promises';
@@ -396,6 +399,29 @@ function measure() {
       }
     }
   }
+  // Shapes and captions outside the innermost lane or pool body holding the shape's centre.
+  const bodies = [
+    ...svg.querySelectorAll('g.cluster rect.swimlane-body, g.cluster rect.pool-body'),
+  ].map((r) => box(r.getBoundingClientRect()));
+  const pokesOut = (b, body) =>
+    b.l < body.l - 1 || b.r > body.r + 1 || b.t < body.t - 1 || b.b > body.b + 1;
+  for (const s of shapes) {
+    const cx = (s.box.l + s.box.r) / 2;
+    const cy = (s.box.t + s.box.b) / 2;
+    const holding = bodies
+      .filter((b) => cx > b.l && cx < b.r && cy > b.t && cy < b.b)
+      .sort((a, b) => area(a) - area(b))[0];
+    if (!holding) {
+      // In a diagram with lanes, a shape whose centre lies in none of them hangs outside.
+      if (bodies.length) add('outsideLane', `${s.id} outside every lane`);
+      continue;
+    }
+    if (pokesOut(s.box, holding)) add('outsideLane', `${s.id} past its lane`);
+    const caption = texts.find((t) => t.kind === 'caption' && t.node === s.node);
+    if (caption && pokesOut(caption.box, holding)) {
+      add('outsideLane', `caption of ${s.id} past its lane`);
+    }
+  }
   for (let a = 0; a < shapes.length; a++) {
     for (let b = a + 1; b < shapes.length; b++) {
       const A = shapes[a];
@@ -425,6 +451,7 @@ const KINDS = [
   'detour',
   'bends',
   'crossing',
+  'outsideLane',
 ];
 const results = [];
 const variants = opts.both ? ['LR', 'TB'] : [opts.tb ? 'TB' : undefined];
