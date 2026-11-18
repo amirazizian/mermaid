@@ -92,6 +92,10 @@ function runBetween(from: Box, to: Box, index: number, count: number): [Point, P
 
 /** How far beyond the participants it passes a detour runs. */
 const DETOUR_CLEARANCE = 18;
+/** How far from a border's corner a run may meet that border. */
+const CORNER_CLEARANCE = 12;
+/** The least room a track pulled back from a corner leaves beside the nodes it passes. */
+const MIN_PASSING = 6;
 
 /** The two coordinates of a point or box side, named along and across a run. */
 interface Axis {
@@ -181,22 +185,41 @@ function detourPastNodes(
   const first = forward ? Math.min(...blockers.map(near)) : Math.max(...blockers.map(near));
   const last = forward ? Math.max(...blockers.map(far)) : Math.min(...blockers.map(far));
   const across = a[axis.across];
-  const sides = [
-    Math.max(...blockers.map((box) => box[axis.acrossHigh])) + DETOUR_CLEARANCE,
-    Math.min(...blockers.map((box) => box[axis.acrossLow])) - DETOUR_CLEARANCE,
-  ].sort((p, q) => Math.abs(p - across) - Math.abs(q - across));
+  const high = Math.max(...blockers.map((box) => box[axis.acrossHigh]));
+  const low = Math.min(...blockers.map((box) => box[axis.acrossLow]));
+  // A track that would meet an end's border by its corner is first tried pulled back to where
+  // it meets the border squarely, when that still passes the nodes at a visible distance.
+  const pulledBack = (side: number): number[] => {
+    const pulled = ends.map((end) =>
+      side > across
+        ? end[axis.acrossHigh] - CORNER_CLEARANCE
+        : end[axis.acrossLow] + CORNER_CLEARANCE
+    );
+    return pulled.filter(
+      (track, i) =>
+        ends[i][axis.acrossLow] < side &&
+        side < ends[i][axis.acrossHigh] &&
+        Math.abs(track - side) < CORNER_CLEARANCE &&
+        (side > across ? track >= high + MIN_PASSING : track <= low - MIN_PASSING)
+    );
+  };
+  const sides = [high + DETOUR_CLEARANCE, low - DETOUR_CLEARANCE]
+    .sort((p, q) => Math.abs(p - across) - Math.abs(q - across))
+    .flatMap((side) => [...pulledBack(side), side]);
 
   /** The ways from the border point `p` of `box` onto the track at `side`, `gap` along. */
   const legs = (box: Box, p: Point, gap: number, side: number): Point[][] => {
+    const jog = [p, at(axis, gap, across), at(axis, gap, side)];
     if (box[axis.acrossLow] < side && side < box[axis.acrossHigh]) {
-      return [[at(axis, p[axis.along], side)]];
+      // A track that meets the border by its corner, which a shape may round off, is reached
+      // from the gap instead.
+      const nearCorner =
+        Math.min(side - box[axis.acrossLow], box[axis.acrossHigh] - side) < CORNER_CLEARANCE;
+      return nearCorner ? [jog] : [[at(axis, p[axis.along], side)]];
     }
     const middle = (box[axis.low] + box[axis.high]) / 2;
     const face = side > box[axis.acrossHigh] ? box[axis.acrossHigh] : box[axis.acrossLow];
-    return [
-      [at(axis, middle, face), at(axis, middle, side)],
-      [p, at(axis, gap, across), at(axis, gap, side)],
-    ];
+    return [[at(axis, middle, face), at(axis, middle, side)], jog];
   };
   const clear = (path: Point[]) =>
     path.slice(1).every((end, i) => !obstacles.some((box) => crosses(path[i], end, box)));

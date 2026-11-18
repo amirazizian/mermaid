@@ -60,7 +60,7 @@ function topLaneHorizontalPadding(lane: Node): number {
   return Math.max(lane.padding ?? MIN_TOP_LANE_HORIZONTAL_PADDING, MIN_TOP_LANE_HORIZONTAL_PADDING);
 }
 
-function assignTopLaneTitleRect(lane: Node): void {
+export function assignTopLaneTitleRect(lane: Node): void {
   const { x, y, width, height } = lane;
   const contentTop = (lane as { swimlaneContentTop?: unknown }).swimlaneContentTop;
   if (

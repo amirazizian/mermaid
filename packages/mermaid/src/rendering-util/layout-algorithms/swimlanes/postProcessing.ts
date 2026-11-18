@@ -10,6 +10,7 @@ import {
 } from './direction/endpointClip.js';
 import { orthogonalizePolyline, simplifyPolyline } from './direction/geometry.js';
 import { framePoolsTb } from './direction/framePoolsTb.js';
+import { openEmptyLaneColumnsInPools, stackEmptyLanesTb } from './direction/emptyLanesTb.js';
 import { linkParticipantBands } from './direction/participantLinks.js';
 import { separateParticipants } from './direction/separateParticipants.js';
 import { applyBtDirectionTransform, applyLrDirectionTransform } from './direction/lrTransform.js';
@@ -73,7 +74,9 @@ export function postProcessSwimlaneLayout(layout: LayoutData, direction?: string
   }
 
   if (direction !== 'LR' && direction !== 'RL') {
+    openEmptyLaneColumnsInPools(layout);
     framePoolsTb(layout);
+    stackEmptyLanesTb(layout);
   }
 
   if (direction === 'BT' && contentNodes.length > 0 && !applyBtDirectionTransform(layout)) {

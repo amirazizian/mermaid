@@ -28,8 +28,8 @@ import { buildLaneModel, readLaneRole } from '../lanes.js';
 import { crosses, foreignParticipantBoxes } from './participantLinks.js';
 
 const EPS_LOCAL = 1e-3;
-/** How far past its pool's border a rerouted flow may lie, as on the border's own stroke. */
-const POOL_BORDER_TOLERANCE = 1;
+/** How far inside its pool's border a rerouted flow keeps, so it never runs along the border. */
+const POOL_BORDER_INSET = 4;
 const MIN_SHARED = 8;
 
 const upperCaseDirection = (raw: unknown): string =>
@@ -2307,10 +2307,10 @@ export function resolveRenderedOrthogonalCrossings(
       rect !== undefined &&
       path.some(
         (point) =>
-          point.x < rect.left - POOL_BORDER_TOLERANCE ||
-          point.x > rect.right + POOL_BORDER_TOLERANCE ||
-          point.y < rect.top - POOL_BORDER_TOLERANCE ||
-          point.y > rect.bottom + POOL_BORDER_TOLERANCE
+          point.x < rect.left + POOL_BORDER_INSET ||
+          point.x > rect.right - POOL_BORDER_INSET ||
+          point.y < rect.top + POOL_BORDER_INSET ||
+          point.y > rect.bottom - POOL_BORDER_INSET
       )
     );
   };
