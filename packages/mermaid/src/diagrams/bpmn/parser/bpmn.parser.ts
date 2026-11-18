@@ -5,13 +5,15 @@ import * as t from './bpmn.tokens.js';
 import { bpmnTokens } from './bpmn.tokens.js';
 import {
   ACTIVITY_MARKERS,
+  ALWAYS_INTERRUPTING,
   CALL_TARGETS,
+  SUBPROCESS_KINDS,
   ELEMENT_ATTRIBUTES,
   LOOP_KINDS,
   TRIGGERS_BY_POSITION,
   positionsFor,
 } from '../types.js';
-import type { LoopKind } from '../types.js';
+import type { LoopKind, SubprocessKind } from '../types.js';
 import { isKnownLocation, runChevrotainParse } from '../../common/parser/runChevrotainParse.js';
 import { scanAttributeBlock } from './bpmnAttributeBlock.js';
 import type { BlockKey } from './bpmnAttributeBlock.js';
@@ -180,6 +182,12 @@ export interface ParsedNode {
   state?: string;
   /** A pool that stands for several participants of one kind. */
   multiple?: boolean;
+  /** A sub-process that is an event sub-process or a transaction: `kind: event | transaction`. */
+  subprocessKind?: SubprocessKind;
+  /** A sub-process drawn open, with the elements indented under it inside it. */
+  expanded?: boolean;
+  /** A start or boundary event written `interrupting: false`, drawn with a dashed ring. */
+  nonInterrupting?: boolean;
 }
 
 export interface ParsedFlow {
@@ -391,6 +399,7 @@ class BpmnVisitor extends BpmnBaseVisitor {
     }
     this.assignGeneratedIds();
     this.assignParents();
+    this.checkSubprocesses();
     const declared = this.leftOut?.size
       ? new Set([...this.declared, ...this.leftOut])
       : this.declared;
@@ -622,6 +631,106 @@ class BpmnVisitor extends BpmnBaseVisitor {
       at: locationOf(idToken),
       attributes: readAttributes(ctx.Attributes[0]),
     });
+  }
+
+  /**
+   * The sub-process an element belongs to, the one its flow runs in: the nearest sub-process
+   * it is indented under, or none at the top level. A boundary event belongs where its
+   * activity does, since it sits on the activity's border.
+   */
+  private scopeOf(node: ParsedNode | undefined): string | undefined {
+    const byId = new Map(this.nodes.map((candidate) => [candidate.id, candidate]));
+    let current = node;
+    if (current?.keyword === 'boundary') {
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    let parentId = current?.parentId;
+    const seen = new Set<string>();
+    while (parentId && !seen.has(parentId)) {
+      seen.add(parentId);
+      const parent = byId.get(parentId);
+      if (parent?.keyword === 'subprocess') {
+        return parent.id;
+      }
+      parentId = parent?.parentId;
+    }
+    return undefined;
+  }
+
+  /**
+   * Marks each sub-process with elements indented under it as expanded, and checks the rules
+   * of sub-processes and their events: a non-interrupting start event begins an event
+   * sub-process, an event sub-process has one start event, which names its trigger, and
+   * neither it nor a flow crosses into or out of a sub-process.
+   */
+  private checkSubprocesses() {
+    const byId = new Map(this.nodes.map((node) => [node.id, node]));
+    for (const node of this.nodes) {
+      const parent = node.parentId ? byId.get(node.parentId) : undefined;
+      if (parent?.keyword === 'subprocess' && node.keyword !== 'boundary') {
+        parent.expanded = true;
+      }
+    }
+    for (const node of this.nodes) {
+      const at = written.get(node);
+      if (node.keyword === 'start' && node.nonInterrupting) {
+        const scope = this.scopeOf(node);
+        this.attempt(at, () => {
+          if (!scope || byId.get(scope)?.subprocessKind !== 'event') {
+            throw new Error(
+              `BPMN error${atText(at)}: only the start event of an event sub-process can be interrupting: false. Indent it under a subprocess with kind: event.`
+            );
+          }
+        });
+      }
+    }
+    for (const sub of this.nodes.filter((node) => node.subprocessKind === 'event')) {
+      const at = written.get(sub);
+      const starts = this.nodes.filter(
+        (node) => node.keyword === 'start' && this.scopeOf(node) === sub.id
+      );
+      this.attempt(at, () => {
+        if (sub.expanded && starts.length !== 1) {
+          throw new Error(
+            `BPMN error${atText(at)}: the event sub-process "${sub.id}" has ${starts.length} start events. An event sub-process starts with exactly one.`
+          );
+        }
+        const untriggered = starts.find((start) => !start.qualifier);
+        if (untriggered) {
+          throw new Error(
+            `BPMN error${atText(written.get(untriggered))}: the start event of the event sub-process "${sub.id}" must name what triggers it.`
+          );
+        }
+      });
+      for (const flow of this.flows.filter(
+        (candidate) =>
+          candidate.kind === 'sequence' && (candidate.from === sub.id || candidate.to === sub.id)
+      )) {
+        this.attempt(written.get(flow), () => {
+          throw new Error(
+            `BPMN error${atText(written.get(flow))}: the event sub-process "${sub.id}" is started by its own start event, so no sequence flow enters or leaves it.`
+          );
+        });
+      }
+    }
+    for (const flow of this.flows.filter((candidate) => candidate.kind === 'sequence')) {
+      const from = byId.get(flow.from);
+      const to = byId.get(flow.to);
+      if (!from || !to) {
+        continue;
+      }
+      const fromScope = this.scopeOf(from);
+      const toScope = this.scopeOf(to);
+      if (fromScope !== toScope) {
+        this.attempt(written.get(flow), () => {
+          const side = (scope: string | undefined) =>
+            scope ? `inside the subprocess "${scope}"` : 'outside every subprocess';
+          throw new Error(
+            `BPMN error${atText(written.get(flow))}: the sequence flow "${flow.from} --> ${flow.to}" crosses a sub-process border: "${flow.from}" is ${side(fromScope)} and "${flow.to}" is ${side(toScope)}. Flow into the sub-process itself instead.`
+          );
+        });
+      }
+    }
   }
 
   /** Applies each `f1@{ ... }` statement to the flow it names, once every flow is known. */
@@ -972,7 +1081,13 @@ const attributeRowOf = (node: ParsedNode): readonly string[] | undefined => {
   if (node.kind === 'data') {
     return ELEMENT_ATTRIBUTES.data;
   }
-  if (node.kind === 'activity' || node.kind === 'pool' || node.keyword === 'xor') {
+  if (
+    node.kind === 'activity' ||
+    node.kind === 'pool' ||
+    node.keyword === 'xor' ||
+    node.keyword === 'start' ||
+    node.keyword === 'boundary'
+  ) {
     return ELEMENT_ATTRIBUTES[node.keyword as keyof typeof ELEMENT_ATTRIBUTES];
   }
   return undefined;
@@ -1053,6 +1168,23 @@ function applyAttributes(node: ParsedNode): void {
         } else {
           throw wrongValue('none');
         }
+        break;
+      case 'kind':
+        if (typeof value !== 'string' || !(SUBPROCESS_KINDS as readonly string[]).includes(value)) {
+          throw wrongValue(listOf([...SUBPROCESS_KINDS]));
+        }
+        node.subprocessKind = value as SubprocessKind;
+        break;
+      case 'interrupting':
+        if (!isBoolean(value)) {
+          throw wrongValue('true or false');
+        }
+        if (!value && (ALWAYS_INTERRUPTING as readonly string[]).includes(node.qualifier ?? '')) {
+          throw new Error(
+            `${where}: ${articleFor(node.qualifier ?? '')} ${node.qualifier} ${node.keyword} event always interrupts, so it cannot be interrupting: false.`
+          );
+        }
+        node.nonInterrupting = !value;
         break;
       case 'state': {
         const state = typeof value === 'number' ? asWritten(written, key, value) : value;
@@ -1183,7 +1315,21 @@ function applyFlowAttributes(
 
 const CONTAINER_KINDS = new Set<ParsedNode['kind']>(['pool', 'lane', 'group']);
 
-/** Only a pool, a lane or a group holds other elements, and a boundary event sits on an activity. */
+/** The kinds a sub-process holds: what a process holds, but not its pools and lanes. */
+const IN_SUBPROCESS = new Set<ParsedNode['kind']>([
+  'group',
+  'event',
+  'gateway',
+  'activity',
+  'data',
+  'store',
+  'annotation',
+]);
+
+/**
+ * Only a pool, a lane, a group or a sub-process holds other elements, and a boundary event sits
+ * on an activity. A boundary event indented straight under a sub-process is attached to it.
+ */
 function assertPlaced(node: ParsedNode, parent: ParsedNode | undefined): void {
   const where = `BPMN error${atText(written.get(node))}`;
   if (node.keyword === 'boundary') {
@@ -1194,9 +1340,17 @@ function assertPlaced(node: ParsedNode, parent: ParsedNode | undefined): void {
     }
     return;
   }
+  if (parent?.keyword === 'subprocess') {
+    if (!IN_SUBPROCESS.has(node.kind)) {
+      throw new Error(
+        `${where}: ${articleFor(node.keyword)} ${node.keyword} cannot be indented under the subprocess "${parent.id}". A sub-process holds flow elements, artifacts and groups, not pools or lanes.`
+      );
+    }
+    return;
+  }
   if (parent && !CONTAINER_KINDS.has(parent.kind)) {
     throw new Error(
-      `${where}: ${articleFor(node.keyword)} ${node.keyword} cannot be indented under the ${parent.keyword} "${parent.id}", because only a pool, a lane or a group holds other elements.`
+      `${where}: ${articleFor(node.keyword)} ${node.keyword} cannot be indented under the ${parent.keyword} "${parent.id}", because only a pool, a lane, a group or a subprocess holds other elements.`
     );
   }
 }

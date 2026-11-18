@@ -1,0 +1,30 @@
+bpmn-beta LR
+title Expanded, event and transaction sub-processes
+  lane "Bookings"
+    start s1 "Trip requested"
+    subprocess tx "Book the trip" @{ kind: transaction }
+      start t0 "Begin"
+      task t1 "Reserve flight"
+      subprocess t2 "Reserve hotel" @{ marker: ad-hoc }
+        task h1 "Search"
+        task h2 "Hold room"
+      end t3 "Booked"
+      t0 --> t1 --> t2 --> t3
+      boundary cancel tc "Cancelled"
+      boundary timer tt "1 hour" @{ interrupting: false }
+    task notify "Notify traveller"
+    task remind "Send reminder"
+    task undo "Release holds"
+    end e1 "Trip booked"
+    end e2 "Trip cancelled"
+    subprocess ev "Traveller cancels" @{ kind: event }
+      start message ev1 "Cancellation" @{ interrupting: false }
+      task ev2 "Record request"
+      end ev3 "Recorded"
+      ev1 --> ev2 --> ev3
+    subprocess col "Collapsed event sub-process" @{ kind: event }
+    subprocess colt "Collapsed transaction" @{ kind: transaction }
+  s1 --> tx --> notify --> e1
+  tt --> remind
+  tc --> undo --> e2
+  colt --> e2

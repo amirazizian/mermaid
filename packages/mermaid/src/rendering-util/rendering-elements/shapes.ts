@@ -90,6 +90,7 @@ import { bpmnActivity } from './shapes/bpmnActivity.js';
 import { bpmnDataObject } from './shapes/bpmnDataObject.js';
 import { bpmnDataStore } from './shapes/bpmnDataStore.js';
 import { bpmnAnnotation } from './shapes/bpmnAnnotation.js';
+import { bpmnSubprocessFrame } from './shapes/bpmnSubprocessFrame.js';
 
 type ShapeHandler = <T extends SVGGraphicsElement>(
   parent: D3Selection<T>,
@@ -600,6 +601,7 @@ const generateShapeMap = () => {
     'bpmn-data': bpmnDataObject,
     'bpmn-data-store': bpmnDataStore,
     'bpmn-annotation': bpmnAnnotation,
+    'bpmn-subprocess-frame': bpmnSubprocessFrame,
   } as const;
 
   const entries = [

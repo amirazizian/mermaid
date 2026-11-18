@@ -18,7 +18,12 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
-const bundle = path.resolve(here, '../packages/mermaid/dist/mermaid.min.js');
+const debug = Boolean(process.env.BPMN_RENDER_DEBUG);
+// BPMN_RENDER_DEBUG=1 loads the unminified bundle and prints the stack of a failure.
+const bundle = path.resolve(
+  here,
+  `../packages/mermaid/dist/${debug ? 'mermaid.js' : 'mermaid.min.js'}`
+);
 
 const args = process.argv.slice(2);
 const opts = { png: false, scale: 2, theme: 'default', out: undefined, files: [] };
@@ -86,7 +91,7 @@ for (const file of opts.files) {
       const { svg } = await window.mermaid.render('d' + Math.random().toString(36).slice(2), src);
       return { svg };
     } catch (e) {
-      return { error: String(e?.message ?? e) };
+      return { error: String(e?.message ?? e), stack: e?.stack };
     }
   }, text);
   const base = path.basename(file).replace(/\.(mmd|mermaid|txt)$/, '');
@@ -94,6 +99,9 @@ for (const file of opts.files) {
   await mkdir(dir, { recursive: true });
   if (result.error || /Syntax error in text|aria-roledescription="error"/.test(result.svg)) {
     console.error(`FAIL ${file}: ${result.error ?? 'rendered the error diagram'}`);
+    if (debug && result.stack) {
+      console.error(result.stack);
+    }
     failed++;
     continue;
   }

@@ -58,17 +58,18 @@ Indentation is counted in characters, and a tab counts as one. **Mixing tabs and
 same depth nests the diagram wrongly**, because a line indented with one tab is shallower than
 a line indented with two spaces.
 
-Nothing checks that a parent is a sensible container, so a `task` indented under another
-`task` parses. The one containment that carries meaning is a `boundary` event under an
-activity, which is how it is attached.
+Only a pool, a lane, a group or a `subprocess` holds other elements, so a `task` indented
+under another `task` is refused. A `subprocess` with elements under it is drawn expanded, and a
+`boundary` event under an activity, a sub-process included, is attached to its border.
 
 ## Containers
 
-| Written | Element              | Notes                                                                               |
-| ------- | -------------------- | ----------------------------------------------------------------------------------- |
-| `pool`  | Pool, or participant | A pool with no lanes is drawn as one; with no contents at all it is a black box     |
-| `lane`  | Lane                 | Divides one participant, so lanes share their borders                               |
-| `group` | Group                | Drawn around its members, carries no execution semantics, and cannot yet span pools |
+| Written      | Element              | Notes                                                                               |
+| ------------ | -------------------- | ----------------------------------------------------------------------------------- |
+| `pool`       | Pool, or participant | A pool with no lanes is drawn as one; with no contents at all it is a black box     |
+| `lane`       | Lane                 | Divides one participant, so lanes share their borders                               |
+| `group`      | Group                | Drawn around its members, carries no execution semantics, and cannot yet span pools |
+| `subprocess` | Expanded sub-process | Drawn as a frame around the elements indented under it                              |
 
 A participant with nothing inside it is legal and useful: a collaboration often shows who a
 message goes to without saying what they do with it. A message flow may name the pools
@@ -126,8 +127,9 @@ same trigger looks different on an `intermediate` than on an `end`.
 waits is defined by what it waits for, so it must name a trigger.
 
 Two rows are wider here than in the notation. `error`, `escalation` and `compensation` start
-an _event sub-process_, and `cancel` belongs to a _transaction_; neither containment can be
-written yet, so both are accepted wherever the enclosing element would otherwise decide.
+an _event sub-process_, and `cancel` belongs to a _transaction_. Both can be written now, but
+the triggers were accepted everywhere before they could, so they still are: a diagram that
+parsed keeps parsing.
 
 ### Boundary events
 
@@ -304,33 +306,34 @@ write yet.
 
 ### Events
 
-| Element                          | Status    | Written                                                                               |
-| -------------------------------- | --------- | ------------------------------------------------------------------------------------- |
-| Start event, plain               | Supported | `start s "..."`                                                                       |
-| Start event, typed               | Supported | `start <trigger> s "..."`                                                             |
-| Intermediate catch event         | Supported | `intermediate <trigger> i "..."`                                                      |
-| Intermediate throw event         | Supported | `throw <trigger> i "..."`                                                             |
-| End event                        | Supported | `end e "..."`                                                                         |
-| Boundary event, interrupting     | Supported | `boundary <trigger> b "..."`, indented under an activity                              |
-| Boundary event, non-interrupting | None      | The notation draws a dashed ring; every boundary event here is drawn solid            |
-| Event sub-process                | None      | Its start triggers are accepted on any `start`, but the containment cannot be written |
+| Element                                   | Status    | Written                                                                        |
+| ----------------------------------------- | --------- | ------------------------------------------------------------------------------ |
+| Start event, plain                        | Supported | `start s "..."`                                                                |
+| Start event, typed                        | Supported | `start <trigger> s "..."`                                                      |
+| Intermediate catch event                  | Supported | `intermediate <trigger> i "..."`                                               |
+| Intermediate throw event                  | Supported | `throw <trigger> i "..."`                                                      |
+| End event                                 | Supported | `end e "..."`                                                                  |
+| Boundary event, interrupting              | Supported | `boundary <trigger> b "..."`, indented under an activity                       |
+| Boundary event, non-interrupting          | Supported | `boundary <trigger> b "..." @{ interrupting: false }`, a dashed ring           |
+| Event sub-process                         | Supported | `subprocess e "..." @{ kind: event }`, with one start event indented under it  |
+| Event sub-process start, non-interrupting | Supported | `start <trigger> s "..." @{ interrupting: false }` inside an event sub-process |
 
 ### Activities
 
-| Element                                                          | Status     | Written                                                                 |
-| ---------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------- |
-| Task, untyped                                                    | Supported  | `task t "..."`                                                          |
-| User, service, script, manual, send, receive, business rule task | Supported  | `<type> task t "..."`                                                   |
-| Sub-process, collapsed                                           | Supported  | `subprocess sp "..."`                                                   |
-| Sub-process, expanded                                            | Workaround | Draw its steps in a `group`                                             |
-| Call activity                                                    | Supported  | `call c "..."`                                                          |
-| Call activity, calling a global task                             | Supported  | `<type> call c "..."`                                                   |
-| Call activity, calling a process                                 | Supported  | `call c "..." @{ calls: process }`                                      |
-| Transaction                                                      | None       | No syntax; `cancel` is accepted on any `boundary` or `end` in its place |
-| Ad-hoc sub-process                                               | Supported  | `subprocess s "..." @{ marker: ad-hoc }`                                |
-| Loop marker                                                      | Supported  | `task t "..." @{ marker: loop }`                                        |
-| Multi-instance marker, parallel or sequential                    | Supported  | `@{ marker: parallel }`, `@{ marker: sequential }`                      |
-| Compensation marker                                              | Supported  | `task t "..." @{ marker: compensation }`                                |
+| Element                                                          | Status    | Written                                                      |
+| ---------------------------------------------------------------- | --------- | ------------------------------------------------------------ |
+| Task, untyped                                                    | Supported | `task t "..."`                                               |
+| User, service, script, manual, send, receive, business rule task | Supported | `<type> task t "..."`                                        |
+| Sub-process, collapsed                                           | Supported | `subprocess sp "..."`                                        |
+| Sub-process, expanded                                            | Supported | `subprocess sp "..."` with its elements indented under it    |
+| Call activity                                                    | Supported | `call c "..."`                                               |
+| Call activity, calling a global task                             | Supported | `<type> call c "..."`                                        |
+| Call activity, calling a process                                 | Supported | `call c "..." @{ calls: process }`                           |
+| Transaction                                                      | Supported | `subprocess t "..." @{ kind: transaction }`, a double border |
+| Ad-hoc sub-process                                               | Supported | `subprocess s "..." @{ marker: ad-hoc }`                     |
+| Loop marker                                                      | Supported | `task t "..." @{ marker: loop }`                             |
+| Multi-instance marker, parallel or sequential                    | Supported | `@{ marker: parallel }`, `@{ marker: sequential }`           |
+| Compensation marker                                              | Supported | `task t "..." @{ marker: compensation }`                     |
 
 ### Gateways
 
@@ -385,7 +388,7 @@ has syntax here.
 Only one error is reported, and the diagram is replaced by the error diagram: a word or a
 statement that cannot be read, if there is one, and otherwise the first written of the errors
 below it. An attribute block left open on its line is the exception: nothing written after it
-is reported, a word or a statement that cannot be read included. There are twelve kinds. Every
+is reported, a word or a statement that cannot be read included. There are thirteen kinds. Every
 message names the line and the column of the statement it refuses, or of the word in it that is
 refused (the trigger, the repeated id, the id a flow starts from, the attribute key or the
 attribute block), except that a lexing error also lists the character range. The line is a line
@@ -417,11 +420,11 @@ an element with no id of its own skips every id you wrote:
 BPMN error at line N, column C: "a" is already declared. Give each element its own id.
 ```
 
-**An element indented where nothing can hold it.** Only a pool, a lane or a group holds other
-elements, and a boundary event has to sit directly under the activity it is attached to:
+**An element indented where nothing can hold it.** Only a pool, a lane, a group or a
+subprocess holds other elements, and a boundary event has to sit directly under the activity it is attached to:
 
 ```txt
-BPMN error at line N, column C: a task cannot be indented under the task "a", because only a pool, a lane or a group holds other elements.
+BPMN error at line N, column C: a task cannot be indented under the task "a", because only a pool, a lane, a group or a subprocess holds other elements.
 BPMN error at line N, column C: a boundary event must be indented under the activity it is attached to.
 ```
 
@@ -474,6 +477,19 @@ BPMN error at line N, column C: the attributes block opened here runs on to the 
 BPMN error at line N, column C: the flow "a --> ghost" refers to "ghost", which is not declared. Declare it as an element before using it.
 ```
 
+**A sub-process or event rule broken.** A sub-process holds flow elements, artifacts and groups;
+an event sub-process has one start event, which names its trigger, and no sequence flow in or
+out; a sequence flow stays on one side of a sub-process's border; only the start event of an
+event sub-process, or a boundary event, can be non-interrupting, and an error, cancel or
+compensation event always interrupts:
+
+```txt
+BPMN error at line N, column C: the event sub-process "ev" has 2 start events. An event sub-process starts with exactly one.
+BPMN error at line N, column C: the sequence flow "t --> inner" crosses a sub-process border: "t" is outside every subprocess and "inner" is inside the subprocess "sp". Flow into the sub-process itself instead.
+BPMN error at line N, column C: only the start event of an event sub-process can be interrupting: false. Indent it under a subprocess with kind: event.
+BPMN error at line N, column C: an error boundary event always interrupts, so it cannot be interrupting: false.
+```
+
 **A flow id or flow attribute that does not fit.** A flow id is declared once and is not an
 element's id; a statement names a flow that has that id and is written once per flow; each key
 fits the kind of flow and the element it leaves:
@@ -499,8 +515,8 @@ rather than as a message:
 
 Worth knowing before you reach for them:
 
-- **Non-interrupting boundary events**, which the notation draws with a dashed ring.
-- **Event sub-processes and transactions**, whose absence is why two rows of the trigger
-  matrix are wider than the notation.
+- **The trigger of a collapsed event sub-process**, which the notation draws in its corner.
+- **A message flow to an element inside an expanded sub-process** is drawn to the
+  sub-process's border.
 - **A group spanning pools**, as in BPMN 2.0.2 figure 8.14.
 - **Choreography and conversation diagrams.**

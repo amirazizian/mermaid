@@ -162,11 +162,11 @@ All thirteen triggers of BPMN 2.0.2 are available - `none`, `message`, `timer`, 
 | `multiple`          | yes       | yes              | yes       | yes          | yes     |
 | none, or omitted    | yes       |                  | yes       |              | yes     |
 
-Two rows are wider here than in the notation, because the grammar cannot yet express the
-containment the notation reads them in. `error`, `escalation` and `compensation` start an
-_event sub-process_ rather than a process, and `cancel` belongs to a _transaction_; there
-is no syntax for either, so they are accepted on any `start`, and on any `boundary` or
-`end`, respectively.
+Two rows are wider here than in the notation. `error`, `escalation` and `compensation` start an
+_event sub-process_ rather than a process, and `cancel` belongs to a _transaction_. Both can be
+written now (see [Sub-processes](#sub-processes)), but these triggers were accepted on any
+`start`, and on any `boundary` or `end`, before they could, so a diagram written that way keeps
+parsing; it is not refused.
 
 A pair the notation does not draw is refused while the diagram is read, naming the line, the column and where that trigger does belong:
 
@@ -316,13 +316,15 @@ Anything about an element that is not its kind, its id or its label is written i
 `@{ }` block, the form flowcharts and kanban boards use, kept on one line. The block holds
 `key: value` pairs separated by commas, and an element only accepts the keys listed for it:
 
-| Element                                                | Attribute  | Values                                                                                          |
-| ------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------- |
-| `task`, `subprocess`, `call`                           | `marker`   | `loop`, `parallel`, `sequential`, `compensation`, or a list of them; `ad-hoc` on a `subprocess` |
-| `call`                                                 | `calls`    | `task` (the default) or `process`, drawn with a `+`                                             |
-| `xor`                                                  | `marker`   | `none` draws it without its X                                                                   |
-| `data`, `data-input`, `data-output`, `data-collection` | `state`    | a name, drawn in brackets under the label, or alone when there is no label and no id            |
-| `pool`                                                 | `multiple` | `true` draws the participant multiplicity marker                                                |
+| Element                                                | Attribute      | Values                                                                                          |
+| ------------------------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------- |
+| `task`, `subprocess`, `call`                           | `marker`       | `loop`, `parallel`, `sequential`, `compensation`, or a list of them; `ad-hoc` on a `subprocess` |
+| `call`                                                 | `calls`        | `task` (the default) or `process`, drawn with a `+`                                             |
+| `subprocess`                                           | `kind`         | `event` or `transaction`                                                                        |
+| `start`, `boundary`                                    | `interrupting` | `false` draws a non-interrupting event with a dashed ring                                       |
+| `xor`                                                  | `marker`       | `none` draws it without its X                                                                   |
+| `data`, `data-input`, `data-output`, `data-collection` | `state`        | a name, drawn in brackets under the label, or alone when there is no label and no id            |
+| `pool`                                                 | `multiple`     | `true` draws the participant multiplicity marker                                                |
 
 ```mermaid
 bpmn-beta LR
@@ -383,6 +385,145 @@ bpmn-beta LR
     end e2 "Timed out"
   s1 --> t1 --> e1
   b1 --> e2
+```
+
+A boundary event that does not stop the activity, but starts a path beside it, is written
+`@{ interrupting: false }` and drawn with a dashed ring. An `error`, `cancel` or `compensation`
+boundary event always interrupts, so it cannot be written that way.
+
+```mermaid
+bpmn-beta LR
+  lane "Support"
+    task t1 "Await customer"
+      boundary timer b1 "1 day" @{ interrupting: false }
+    task t2 "Send reminder"
+    end e1 "Resolved"
+  t1 --> e1
+  b1 --> t2
+```
+
+```mermaid-example
+bpmn-beta LR
+  lane "Support"
+    task t1 "Await customer"
+      boundary timer b1 "1 day" @{ interrupting: false }
+    task t2 "Send reminder"
+    end e1 "Resolved"
+  t1 --> e1
+  b1 --> t2
+```
+
+## Sub-processes
+
+A `subprocess` with elements indented under it is _expanded_: it is drawn as a rounded frame
+with its title in the corner and its own flow inside. One with nothing indented under it, or
+only boundary events, stays collapsed and is drawn with its `+`. A boundary event indented
+straight under a sub-process is attached to its border, as on any other activity.
+
+The inside of a sub-process is a process of its own, so a sequence flow does not cross its
+border: flow into the sub-process itself, which hands over to its start event, and out of it
+once its end is reached. A message flow or an association may name an element inside; it is
+drawn to the sub-process's border.
+
+```mermaid
+bpmn-beta LR
+  lane "Orders"
+    start s1 "Order received"
+    subprocess sp "Handle the order"
+      start a "Begin"
+      task b "Pick items"
+      end c "Picked"
+      a --> b --> c
+      boundary timer late "2 days" @{ interrupting: false }
+    task ship "Ship"
+    task chase "Chase warehouse"
+    end e1 "Done"
+  s1 --> sp --> ship --> e1
+  late --> chase
+```
+
+```mermaid-example
+bpmn-beta LR
+  lane "Orders"
+    start s1 "Order received"
+    subprocess sp "Handle the order"
+      start a "Begin"
+      task b "Pick items"
+      end c "Picked"
+      a --> b --> c
+      boundary timer late "2 days" @{ interrupting: false }
+    task ship "Ship"
+    task chase "Chase warehouse"
+    end e1 "Done"
+  s1 --> sp --> ship --> e1
+  late --> chase
+```
+
+A sub-process may hold groups, artifacts and other sub-processes, but not pools or lanes. Its
+markers come from its `marker` attribute, as a collapsed one's do, and are drawn on the frame's
+bottom edge.
+
+### Event sub-processes and transactions
+
+`kind` makes a sub-process an event sub-process or a transaction, open or collapsed:
+
+| Attribute           | Element           | Drawn as        |
+| ------------------- | ----------------- | --------------- |
+| `kind: event`       | Event sub-process | A dotted border |
+| `kind: transaction` | Transaction       | A double border |
+
+An event sub-process is started by its own start event when that event's trigger occurs while
+the process around it runs, so it has exactly one start event, which names its trigger, and no
+sequence flow enters or leaves it. Its start event interrupts the process around it unless it
+is written `@{ interrupting: false }`, drawn with a dashed ring; only the start event of an
+event sub-process can be written that way, and an `error` or `compensation` one always
+interrupts.
+
+A transaction is cancelled by a `cancel` end event inside it and handled by a `cancel` boundary
+event on it.
+
+```mermaid
+bpmn-beta LR
+  lane "Bookings"
+    start s1 "Trip requested"
+    subprocess tx "Book the trip" @{ kind: transaction }
+      start t0 "Begin"
+      task t1 "Reserve flight"
+      task t2 "Reserve hotel"
+      end t3 "Booked"
+      t0 --> t1 --> t2 --> t3
+      boundary cancel tc "Cancelled"
+    task undo "Release holds"
+    end e1 "Trip booked"
+    end e2 "Trip cancelled"
+    subprocess ev "Traveller cancels" @{ kind: event }
+      start message ev1 "Cancellation" @{ interrupting: false }
+      task ev2 "Record request"
+      ev1 --> ev2
+  s1 --> tx --> e1
+  tc --> undo --> e2
+```
+
+```mermaid-example
+bpmn-beta LR
+  lane "Bookings"
+    start s1 "Trip requested"
+    subprocess tx "Book the trip" @{ kind: transaction }
+      start t0 "Begin"
+      task t1 "Reserve flight"
+      task t2 "Reserve hotel"
+      end t3 "Booked"
+      t0 --> t1 --> t2 --> t3
+      boundary cancel tc "Cancelled"
+    task undo "Release holds"
+    end e1 "Trip booked"
+    end e2 "Trip cancelled"
+    subprocess ev "Traveller cancels" @{ kind: event }
+      start message ev1 "Cancellation" @{ interrupting: false }
+      task ev2 "Record request"
+      ev1 --> ev2
+  s1 --> tx --> e1
+  tc --> undo --> e2
 ```
 
 ## Flows
@@ -680,7 +821,7 @@ bpmn-beta LR
 
 ## What this beta covers
 
-`bpmn-beta` draws BPMN 2.0.2 process and collaboration diagrams: pools and lanes, events with all thirteen triggers, the five gateway types, tasks with their task types, collapsed sub-processes and call activities, boundary events, sequence flows with their default and conditional variants, message flows with their messages, associations in any direction, data objects and stores, text annotations and groups. The [BPMN element reference](./bpmnElements.md) lists every BPMN 2.0 element as supported, reachable through a workaround, or not written yet.
+`bpmn-beta` draws BPMN 2.0.2 process and collaboration diagrams: pools and lanes, events with all thirteen triggers, the five gateway types, tasks with their task types, collapsed and expanded sub-processes, event sub-processes and transactions, call activities, interrupting and non-interrupting boundary events, sequence flows with their default and conditional variants, message flows with their messages, associations in any direction, data objects and stores, text annotations and groups. The [BPMN element reference](./bpmnElements.md) lists every BPMN 2.0 element as supported, reachable through a workaround, or not written yet.
 
 It does not read or write BPMN XML, so a diagram cannot be opened in, or imported from, a BPMN modelling tool.
 
@@ -690,7 +831,9 @@ While the diagram is in beta, its syntax can change between releases. Once the s
 
 ## Current limitations
 
-- An event sub-process and a transaction have no syntax, so the two rules that depend on one are wider here than in the notation: `error`, `escalation` and `compensation` are accepted on any `start`, and `cancel` on any `boundary` or `end`. Every other position and trigger pair is checked.
+- The two trigger rules that depend on an event sub-process or a transaction are wider here than in the notation, so that diagrams written before those could be expressed keep parsing: `error`, `escalation` and `compensation` are accepted on any `start`, and `cancel` on any `boundary` or `end`. Every other position and trigger pair is checked.
+- A message flow or association to an element inside an expanded sub-process is drawn to the sub-process's border.
+- A collapsed event sub-process does not show its start event's trigger in its corner.
 - A group is contained by one lane, so it cannot yet stretch across pools the way BPMN 2.0.2 Figure 8.14 shows.
 - An artifact is drawn beside the element it is associated with, so one associated across a lane boundary is drawn in that element's lane rather than the lane it was written in.
 - Choreography and conversation diagrams are separate BPMN diagram types with their own shapes, and neither has syntax here.

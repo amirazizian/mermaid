@@ -48,10 +48,15 @@ export const CALL_TARGETS = ['task', 'process'] as const;
  * The attributes each element accepts in its trailing `@{ }` block. An element kind
  * missing from this table takes none, and a key missing from its row is refused.
  */
+/** The kinds of sub-process besides the plain one: an event sub-process and a transaction. */
+export const SUBPROCESS_KINDS = ['event', 'transaction'] as const;
+
 export const ELEMENT_ATTRIBUTES = {
   task: ['marker'],
   call: ['marker', 'calls'],
-  subprocess: ['marker'],
+  subprocess: ['marker', 'kind'],
+  start: ['interrupting'],
+  boundary: ['interrupting'],
   xor: ['marker'],
   data: ['state'],
   pool: ['multiple'],
@@ -116,3 +121,7 @@ export type TaskType = (typeof TASK_TYPES)[number];
 export type ActivityMarker = (typeof ACTIVITY_MARKERS)[number];
 export type LoopKind = (typeof LOOP_KINDS)[number];
 export type CallTarget = (typeof CALL_TARGETS)[number];
+export type SubprocessKind = (typeof SUBPROCESS_KINDS)[number];
+
+/** The triggers an event is always interrupting with: it cannot be written `interrupting: false`. */
+export const ALWAYS_INTERRUPTING = ['error', 'cancel', 'compensation'] as const;

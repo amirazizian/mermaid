@@ -171,7 +171,7 @@ describe('element attributes', () => {
     ['task t "T" @{ colour: red }', '"colour" is not an attribute of a task, which takes marker'],
     ['subprocess s "S" @{ state: x }', 'which takes marker'],
     ['and g "G" @{ marker: none }', 'an and gateway takes no attributes'],
-    ['start s "S" @{ marker: loop }', 'a start event takes no attributes'],
+    ['end s "S" @{ marker: loop }', 'an end event takes no attributes'],
     ['data-store ds "D" @{ state: x }', 'a data store takes no attributes'],
     ['pool p "P" @{ multiple: yes }', 'multiple takes true or false, not "yes"'],
     ['xor g "G" @{ marker: hidden }', 'marker takes none, not "hidden"'],
@@ -196,8 +196,8 @@ describe('element attributes', () => {
   });
 
   it('names the block, not a key, for an element that takes no attributes', () => {
-    expect(() => parseBpmn(inLane('start s "S" @{ marker: loop }'))).toThrow(
-      /^BPMN error at line 3, column 17: /
+    expect(() => parseBpmn(inLane('end s "S" @{ marker: loop }'))).toThrow(
+      /^BPMN error at line 3, column 15: /
     );
   });
 

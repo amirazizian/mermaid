@@ -196,6 +196,33 @@ const getStyles = (options: BpmnStyleOptions) => {
     stroke: ${eventFill};
   }
 
+  .node.bpmn-non-interrupting circle.bpmn-event-ring {
+    stroke-dasharray: 5 3;
+  }
+
+  .node .bpmn-frame-outline {
+    fill: ${fade(activityFill, 0.3)};
+    stroke: ${activityStroke};
+    stroke-width: ${px(activityStrokeWidth)};
+  }
+  .node .bpmn-frame-outline-inner {
+    fill: none;
+    stroke: ${activityStroke};
+    stroke-width: ${px(activityStrokeWidth)};
+  }
+  .node.frame-dotted > .bpmn-frame > .bpmn-frame-outline,
+  .node.bpmn-event-subprocess > .bpmn-activity-body > rect.bpmn-activity-rect {
+    stroke-dasharray: 2 3;
+  }
+  .node.bpmn-subprocess-frame > .bpmn-frame > .bpmn-activity-markers {
+    color: ${glyphColor};
+    opacity: 0.85;
+  }
+  .node rect.bpmn-activity-frame-inner {
+    fill: none;
+    stroke: ${activityStroke};
+    stroke-width: ${px(activityStrokeWidth)};
+  }
   .node.bpmn-call rect.bpmn-activity-rect {
     stroke-width: 3.4px;
   }

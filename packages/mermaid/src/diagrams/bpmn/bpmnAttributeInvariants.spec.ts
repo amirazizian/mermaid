@@ -72,7 +72,7 @@ const ERROR_KINDS: ErrorKind[] = [
   },
   {
     name: 'an element that takes no attributes',
-    lines: (id) => [`start ${id} "S" @{ marker: loop }`],
+    lines: (id) => [`end ${id} "S" @{ marker: loop }`],
     errorLine: 0,
     message: /takes no attributes/,
   },

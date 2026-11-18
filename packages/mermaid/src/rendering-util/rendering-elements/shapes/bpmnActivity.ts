@@ -45,6 +45,20 @@ export async function bpmnActivity<T extends SVGGraphicsElement>(
     .attr('ry', 10)
     .attr('style', nodeStyles);
 
+  // A transaction is drawn with a double border.
+  if (node.metadata?.frameBorder === 'double') {
+    const gap = 3;
+    body
+      .append('rect')
+      .attr('class', 'bpmn-activity-frame-inner')
+      .attr('x', -width / 2 + gap)
+      .attr('y', -height / 2 + gap)
+      .attr('width', width - 2 * gap)
+      .attr('height', height - 2 * gap)
+      .attr('rx', 10 - gap)
+      .attr('ry', 10 - gap);
+  }
+
   if (icon) {
     const corner = body.append('g').attr('class', 'bpmn-activity-icon');
     corner.html(`<g>${await glyphSvg(icon, ICON_SIZE)}</g>`);
