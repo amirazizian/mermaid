@@ -24,10 +24,12 @@ import {
 import type { OrthogonalSegment, Point, RectBounds, RectSide } from './geometry.js';
 import type { Edge, Node } from '../../../types.js';
 import { EDGE_ROUTING } from '../config.js';
-import { buildLaneModel } from '../lanes.js';
+import { buildLaneModel, readLaneRole } from '../lanes.js';
 import { crosses, foreignParticipantBoxes } from './participantLinks.js';
 
 const EPS_LOCAL = 1e-3;
+/** How far past its pool's border a rerouted flow may lie, as on the border's own stroke. */
+const POOL_BORDER_TOLERANCE = 1;
 const MIN_SHARED = 8;
 
 const upperCaseDirection = (raw: unknown): string =>
@@ -2273,6 +2275,46 @@ export function resolveRenderedOrthogonalCrossings(
     return false;
   };
 
+  // The pool both ends of an edge sit in: a reroute stays inside it, so a flow within one pool
+  // does not go round the outside of that pool.
+  const poolsAround = (id: string | undefined): string[] => {
+    const pools: string[] = [];
+    const seen = new Set<string>();
+    let current = id ? nodeByIdMap.get(id)?.parentId : undefined;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const group = nodeByIdMap.get(current);
+      if (readLaneRole(group) === 'pool') {
+        pools.push(current);
+      }
+      current = group?.parentId;
+    }
+    return pools;
+  };
+  const poolRectCache = new Map<MaterializedEdge, RectLite | undefined>();
+  const poolRectFor = (edge: MaterializedEdge): RectLite | undefined => {
+    if (!poolRectCache.has(edge)) {
+      const endPools = new Set(poolsAround((edge as { end?: string }).end));
+      const shared = poolsAround((edge as { start?: string }).start).find((id) => endPools.has(id));
+      const pool = shared ? nodeByIdMap.get(shared) : undefined;
+      poolRectCache.set(edge, pool ? rectOfNodeBounds(pool) : undefined);
+    }
+    return poolRectCache.get(edge);
+  };
+  const pathLeavesPool = (edge: MaterializedEdge, path: PointLite[]): boolean => {
+    const rect = poolRectFor(edge);
+    return (
+      rect !== undefined &&
+      path.some(
+        (point) =>
+          point.x < rect.left - POOL_BORDER_TOLERANCE ||
+          point.x > rect.right + POOL_BORDER_TOLERANCE ||
+          point.y < rect.top - POOL_BORDER_TOLERANCE ||
+          point.y > rect.bottom + POOL_BORDER_TOLERANCE
+      )
+    );
+  };
+
   const pushOrthogonalCandidate = (candidates: PointLite[][], points: PointLite[]): void => {
     const candidate = simplifyPolyline(dedupeConsecutivePoints(points));
     if (segmentsFor(candidate).length === candidate.length - 1) {
@@ -2606,7 +2648,7 @@ export function resolveRenderedOrthogonalCrossings(
     const candidates = candidatePathsFor(edge)
       .map((candidate) => simplifyPolyline(dedupeConsecutivePoints(candidate)))
       .filter((candidate) => {
-        if (pathHitsNode(edge, candidate)) {
+        if (pathHitsNode(edge, candidate) || pathLeavesPool(edge, candidate)) {
           return false;
         }
         const key = candidate
@@ -2869,7 +2911,7 @@ export function resolveRenderedOrthogonalCrossings(
     for (const edge of current.edges) {
       const currentEdgeBends = countOrthogonalBends(replacementPointsFor(edge), EPS_LOCAL);
       for (const candidate of candidatePathsFor(edge)) {
-        const candidateHitsNode = pathHitsNode(edge, candidate);
+        const candidateHitsNode = pathHitsNode(edge, candidate) || pathLeavesPool(edge, candidate);
         const candidateHasSegmentConflict =
           !candidateHitsNode && pathHasSegmentConflict(edge, candidate);
         const candidateCrossings = crossingCountWithSingleReplacement(current, edge, candidate);
