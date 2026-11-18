@@ -289,12 +289,11 @@ describe('standing a node off its host', () => {
     const nodes = [host('h'), stood('a', 20, { width: 40, height: 60 })];
     // Downwards it stands to one side instead, so the same node reaches by its width and
     // occupies its height along the border. Measuring the other one reserves too little,
-    // and whatever the layout put in the space it was not given is drawn over. The node is
-    // also moved clear of the flow through the host's middle, so all of it is reserved
-    // before the host's centre: its height plus the 8 it stands clear by.
+    // and whatever the layout put in the space it was not given is drawn over. No flow runs
+    // out of a TB host's side, so the node stands level with the host's middle.
     expect(anchorFootprints(nodes, 'TB').get('h')?.right).toEqual({
-      before: 68,
-      after: 0,
+      before: 30,
+      after: 30,
       beyond: 60,
     });
   });
@@ -420,13 +419,36 @@ describe('reserving the room an anchored run is placed in', () => {
     });
   });
 
-  it('reserves the room above the host for a node stood off its side, where it is shifted', () => {
-    // The repro: a host centred on y 50, a 60-tall node standing off by 20. It lands at
-    // y -18..42, so the room reserved above the centre must reach down to -18.
+  it('stands a node off a TB host level with its middle, inside the room reserved', () => {
     const nodes = [host('h'), stood('a', { width: 40, height: 60 })];
     pinAnchoredNodes(asLayout(nodes), { space: 'final', direction: 'TB' });
-    expect(nodes[1].y! - 30).toBe(-18);
-    expect(50 - anchorFootprints(nodes, 'TB').get('h')!.right!.before).toBeLessThanOrEqual(-18);
+    expect(nodes[1].y).toBe(50);
+    expect(50 - anchorFootprints(nodes, 'TB').get('h')!.right!.before).toBeLessThanOrEqual(20);
+  });
+
+  it('reserves the room above a host with a flow to another pool, where the node is shifted', () => {
+    // The repro: a host centred on y 50, a 60-tall node standing off by 20. A message flow
+    // leaves the host's side, so the node is moved clear of its middle: it lands at
+    // y -18..42, and the room reserved above the centre must reach down to -18.
+    const group = (id: string, laneRole: string, parentId?: string): Node =>
+      ({ id, isGroup: true, parentId, metadata: { laneRole } }) as unknown as Node;
+    const hostInLane = { ...host('h'), parentId: 'l1' } as Node;
+    const other = { ...host('o'), parentId: 'l2' } as Node;
+    const nodes = [
+      group('p1', 'pool'),
+      group('l1', 'lane', 'p1'),
+      group('p2', 'pool'),
+      group('l2', 'lane', 'p2'),
+      hostInLane,
+      other,
+      stood('a', { width: 40, height: 60 }),
+    ];
+    const edges = [{ id: 'm', start: 'h', end: 'o' }] as LayoutData['edges'];
+    pinAnchoredNodes({ nodes, edges } as LayoutData, { space: 'final', direction: 'TB' });
+    expect(nodes[6].y! - 30).toBe(-18);
+    expect(50 - anchorFootprints(nodes, 'TB', edges).get('h')!.right!.before).toBeLessThanOrEqual(
+      -18
+    );
   });
 });
 
@@ -965,17 +987,34 @@ describe('routing the line from an anchored node to its host', () => {
 
   const pts = (...pairs: [number, number][]): Point[] => pairs.map(([x, y]) => ({ x, y }));
 
-  // The host spans x 50..150 and y 10..90. A line may land 8 inside either end of the
-  // border it meets, so on the top and bottom it lands within x 58..142 and on the left and
-  // right within y 18..82.
+  // The host spans x 50..150 and y 10..90. A node past an end of the border it stands by
+  // goes round the host's corner into the end face, 8 in from the corner, by one turn.
   describe('on the way across the border', () => {
     it.each([
-      ['bottom', { x: 200, y: 140 }, pts([200, 140], [200, 95], [142, 95], [142, 50])],
-      ['top', { x: 200, y: -40 }, pts([200, -40], [200, 5], [142, 5], [142, 50])],
-      ['right', { x: 190, y: 150 }, pts([190, 150], [145, 150], [145, 82], [100, 82])],
-      ['left', { x: 10, y: 150 }, pts([10, 150], [55, 150], [55, 82], [100, 82])],
-    ] as const)('steps in to the nearest landing on the %s border', (side, at, expected) => {
-      expect(route(side, at)).toEqual(expected);
+      ['bottom', { x: 200, y: 140 }, pts([200, 140], [200, 82], [100, 82])],
+      ['top', { x: 200, y: -40 }, pts([200, -40], [200, 18], [100, 18])],
+      ['right', { x: 190, y: 150 }, pts([190, 150], [142, 150], [142, 50])],
+      ['left', { x: 10, y: 150 }, pts([10, 150], [58, 150], [58, 50])],
+    ] as const)(
+      'goes round the corner into the end face from the %s border',
+      (side, at, expected) => {
+        expect(route(side, at)).toEqual(expected);
+      }
+    );
+
+    it('steps in to the nearest landing on the border when the corner is in the way', () => {
+      // Another node stands just past the host's corner, where the line would turn.
+      const nodes = [
+        node('h', { x: 100, y: 50, width: 100, height: 80 } as Partial<Node>),
+        node('a', { x: 200, y: 140, width: 40, height: 60 } as Partial<Node>),
+        node('o', { x: 200, y: 80, width: 40, height: 20 } as Partial<Node>),
+      ];
+      const edge = { id: 'e', start: 'a', end: 'h', points: [{ x: -1, y: -1 }] };
+      const layout = { nodes, edges: [edge] } as unknown as LayoutData;
+      squareAnchoredEdges(layout, [
+        { nodeId: 'a', hostId: 'h', side: 'bottom', x: 0, y: 0, outward: { x: 0, y: 1 } },
+      ]);
+      expect(layout.edges?.[0].points).toEqual(pts([200, 140], [200, 95], [142, 95], [142, 50]));
     });
 
     it.each([
@@ -1002,23 +1041,24 @@ describe('routing the line from an anchored node to its host', () => {
         pts([100, 140], [100, 50])
       );
       expect(route('bottom', { x: 130, y: 140 }, { hostBox: { width: 10 } })).toEqual(
-        pts([130, 140], [130, 95], [100, 95], [100, 50])
+        pts([130, 140], [130, 82], [100, 82])
       );
     });
 
     it('lands on the host centre when the host has no extent', () => {
       expect(route('bottom', { x: 200, y: 140 }, { hostBox: { width: undefined } })).toEqual(
-        pts([200, 140], [200, 95], [100, 95], [100, 50])
+        pts([200, 140], [200, 82], [100, 82])
       );
     });
   });
 
   describe('leaving the node by a face', () => {
+    // A node standing over the border leaves straight from the end of its face, just inside.
     it.each([
-      ['right', pts([100, 140], [136, 140], [136, 50])],
-      ['left', pts([100, 140], [64, 140], [64, 50])],
+      ['right', pts([117, 140], [117, 50])],
+      ['left', pts([83, 140], [83, 50])],
     ] as const)(
-      'leaves a node on the bottom border by its %s face before turning',
+      'leaves a node over the bottom border straight from its %s face',
       (face, expected) => {
         expect(route('bottom', { x: 100, y: 140 }, { face })).toEqual(expected);
       }
@@ -1056,9 +1096,9 @@ describe('routing the line from an anchored node to its host', () => {
       );
     });
 
-    it('measures the stub from the node own half-extent, which is nothing without a size', () => {
+    it('measures the face from the node own half-extent, which is nothing without a size', () => {
       expect(route('bottom', { x: 100, y: 140, width: undefined }, { face: 'right' })).toEqual(
-        pts([100, 140], [116, 140], [116, 50])
+        pts([97, 140], [97, 50])
       );
     });
   });

@@ -73,7 +73,8 @@ const crossings = (paths: Map<string, Point[]>) => {
   return found;
 };
 
-const entryOf = (points: Point[]) => points.find((point) => point.y === 50)!.x;
+/** Where a line round the host's corner meets the end face: its height there. */
+const endEntryOf = (points: Point[]) => points[points.length - 1].y;
 
 describe('lines from several nodes pinned beside one side', () => {
   it('nests the lines of nodes beyond one end so none crosses another', () => {
@@ -81,21 +82,24 @@ describe('lines from several nodes pinned beside one side', () => {
     expect(crossings(paths)).toEqual([]);
   });
 
-  it('gives each line beyond the end its own entry, outermost nearest the end', () => {
+  it('takes each line beyond the end round the corner into the end face, outermost furthest in', () => {
     const paths = route({ a: -60, b: 20, c: 100 });
-    const [a, b] = [entryOf(paths.get('e-a')!), entryOf(paths.get('e-b')!)];
-    expect(a).toBe(58);
-    expect(b).toBeGreaterThan(a);
-    expect(b).toBeLessThan(100);
+    const [a, b] = [endEntryOf(paths.get('e-a')!), endEntryOf(paths.get('e-b')!)];
+    expect(b).toBe(82);
+    expect(a).toBeLessThan(b);
+    expect(a).toBeGreaterThan(10);
   });
 
-  it('turns the outermost line nearest the host, inside the gap between the shapes', () => {
+  it('turns each line beyond the end once, straight up from its node', () => {
     const paths = route({ a: -60, b: 20 });
-    const turnOf = (points: Point[]) => points[1].y;
-    const [a, b] = [turnOf(paths.get('e-a')!), turnOf(paths.get('e-b')!)];
-    expect(a).toBeLessThan(b);
-    expect(a).toBeGreaterThan(90);
-    expect(b).toBeLessThan(125);
+    for (const [id, x] of [
+      ['e-a', -60],
+      ['e-b', 20],
+    ] as const) {
+      const points = paths.get(id)!;
+      expect(points).toHaveLength(3);
+      expect(points[1].x).toBe(x);
+    }
   });
 
   it('runs a node abreast of the side straight in', () => {
@@ -112,6 +116,6 @@ describe('lines from several nodes pinned beside one side', () => {
   it('nests the lines beyond the other end too', () => {
     const paths = route({ a: 260, b: 180, c: 100 });
     expect(crossings(paths)).toEqual([]);
-    expect(entryOf(paths.get('e-a')!)).toBe(142);
+    expect(endEntryOf(paths.get('e-b')!)).toBe(82);
   });
 });

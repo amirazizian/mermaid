@@ -6,7 +6,7 @@ import type {
   ClusterNode,
 } from '../../types.js';
 import { buildLaneModel, type LaneModel } from './lanes.js';
-import { collectAnchoredIds, resolveAnchorHostId } from './anchoredNodes.js';
+import { anchorFootprints, collectAnchoredIds, resolveAnchorHostId } from './anchoredNodes.js';
 
 export type Layout = LayoutData;
 export type Node = MermaidNode;
@@ -47,9 +47,26 @@ export type Edge = EdgeRef;
 
 export const DEFAULT_SWIMLANE_ID = '__swimlane_default__';
 
+/** Whether `node` lies inside the group `groupId`, at any depth. */
+function isInside(node: Node, groupId: string, allNodes: Node[]): boolean {
+  const byId = new Map(allNodes.map((n) => [n.id, n]));
+  const seen = new Set<string>();
+  let parent = node.parentId;
+  while (parent && !seen.has(parent)) {
+    if (parent === groupId) {
+      return true;
+    }
+    seen.add(parent);
+    parent = byId.get(parent)?.parentId;
+  }
+  return false;
+}
+
 export interface WriteBackOptions {
   layerGap?: number;
   nodeGap?: number;
+  /** The layout's direction. In TB a group also holds the runs stood off its nodes. */
+  direction?: 'TB' | 'LR' | 'BT' | 'RL';
 }
 
 // Captured swimlane fixtures use 21px as the stable single-line label height.
@@ -320,6 +337,47 @@ export function writeBackToLayoutData(
   }
   const groupBounds = new Map<NodeId, { minX: number; maxX: number; minY: number; maxY: number }>();
   const laneModel = buildLaneModel(allNodes);
+  // In TB the nodes stood off a host (artifacts) are pinned beside it later, so a group holds
+  // the room their runs take as well as its own nodes. LR sizes its groups again after its
+  // transform, with the same room.
+  const footprints =
+    opts?.direction === 'TB'
+      ? anchorFootprints(allNodes, 'TB', layout.edges)
+      : new Map<string, never>();
+  const reservedBox = (
+    group: Node,
+    child: Node,
+    cx: number,
+    cy: number,
+    cw: number,
+    ch: number
+  ) => {
+    const box = { left: cx - cw / 2, right: cx + cw / 2, top: cy - ch / 2, bottom: cy + ch / 2 };
+    // Only lanes and pools hold the runs; another group (a frame round some nodes) keeps to
+    // its own nodes.
+    if (!laneModel.isLane(group.id) && !laneModel.isPool(group.id)) {
+      return box;
+    }
+    for (const [side, footprint] of Object.entries(footprints.get(child.id) ?? {})) {
+      if (!footprint) {
+        continue;
+      }
+      if (side === 'left' || side === 'right') {
+        box.top = Math.min(box.top, cy - footprint.before);
+        box.bottom = Math.max(box.bottom, cy + footprint.after);
+        box.left = side === 'left' ? Math.min(box.left, cx - cw / 2 - footprint.beyond) : box.left;
+        box.right =
+          side === 'right' ? Math.max(box.right, cx + cw / 2 + footprint.beyond) : box.right;
+      } else {
+        box.left = Math.min(box.left, cx - footprint.before);
+        box.right = Math.max(box.right, cx + footprint.after);
+        box.top = side === 'top' ? Math.min(box.top, cy - ch / 2 - footprint.beyond) : box.top;
+        box.bottom =
+          side === 'bottom' ? Math.max(box.bottom, cy + ch / 2 + footprint.beyond) : box.bottom;
+      }
+    }
+    return box;
+  };
   const topLevelGroups: Node[] = [];
   for (const group of groupsDeepestFirst(allNodes)) {
     if (laneModel.isLane(group.id)) {
@@ -329,7 +387,17 @@ export function writeBackToLayoutData(
     // reaches it through the column spacing, and anchoring moves each label onto its
     // edge later. Along the flow it also holds the labels, which can be taller than
     // the row of nodes they sit beside.
-    const children = allNodes.filter((n) => n.parentId === group.id && !anchoredIds.has(n.id));
+    const direct = allNodes.filter((n) => n.parentId === group.id && !anchoredIds.has(n.id));
+    // A lane also holds the runs of hosts nested deeper in it, inside a group of its own.
+    const children =
+      laneModel.isLane(group.id) || laneModel.isPool(group.id)
+        ? [
+            ...direct,
+            ...allNodes.filter(
+              (n) => footprints.has(n.id) && !direct.includes(n) && isInside(n, group.id, allNodes)
+            ),
+          ]
+        : direct;
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
@@ -340,12 +408,13 @@ export function writeBackToLayoutData(
       const cw = child.width ?? 0;
       const ch = child.height ?? 0;
       if (cx != null && cy != null) {
+        const box = reservedBox(group, child, cx, cy, cw, ch);
         if (!child.isEdgeLabel) {
-          minX = Math.min(minX, cx - cw / 2);
-          maxX = Math.max(maxX, cx + cw / 2);
+          minX = Math.min(minX, box.left);
+          maxX = Math.max(maxX, box.right);
         }
-        minY = Math.min(minY, cy - ch / 2);
-        maxY = Math.max(maxY, cy + ch / 2);
+        minY = Math.min(minY, box.top);
+        maxY = Math.max(maxY, box.bottom);
       }
     }
     if (minX === Infinity || minY === Infinity) {

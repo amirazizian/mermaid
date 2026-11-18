@@ -20,6 +20,7 @@ import {
   vertexOf,
 } from './endpointClip.js';
 import type { RoutedEdge } from './endpointClip.js';
+import { readAnchor } from '../anchoredNodes.js';
 import { dedupeConsecutivePoints } from './geometry.js';
 import type { Point, RectBounds } from './geometry.js';
 import type { Obstacle } from './vertexPorts.js';
@@ -486,6 +487,10 @@ export function rerouteDetouredEdges(edges: unknown[], nodeByIdMap: Map<string, 
       continue;
     }
     if (!declaresEndpointProfile(src) && !declaresEndpointProfile(dst)) {
+      continue;
+    }
+    // A line to a node stood off its host is laid with the node, beside the host.
+    if (readAnchor(src)?.gap || readAnchor(dst)?.gap) {
       continue;
     }
     const srcRect = endpointRectOf(src);

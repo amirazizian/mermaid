@@ -1,3 +1,4 @@
+import { readAnchor } from '../anchoredNodes.js';
 import type { Edge, Node } from '../../../types.js';
 import { CORNER_CLEARANCE } from './endpointClip.js';
 import {
@@ -82,6 +83,11 @@ function terminalAt(
   const node = nodeByIdMap.get(endpointId(edge, atStart));
   const rect = node ? rectOfNodeBounds(node) : undefined;
   if (!node || !rect || route.length < 3) {
+    return undefined;
+  }
+  // A line from a node stood off its host leaves where that node's own layout put it: by a
+  // text annotation's bracket, say, at the end of its face.
+  if (readAnchor(node)?.gap) {
     return undefined;
   }
   return terminalFrom(edge, node, rect, atStart ? route : route.reverse());

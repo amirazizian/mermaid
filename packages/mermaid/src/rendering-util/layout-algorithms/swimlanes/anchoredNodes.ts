@@ -1,4 +1,5 @@
 import type { LayoutData, Node } from '../../types.js';
+import { buildLaneModel } from './lanes.js';
 
 type Direction = 'TB' | 'LR' | 'BT' | 'RL';
 
@@ -145,6 +146,9 @@ export interface AnchorPin {
   y: number;
 
   outward: { x: number; y: number };
+
+  /** The node's place in a row going out from the host's side, nearest first. */
+  row?: number;
 }
 
 function compareBucketEntries(
@@ -216,6 +220,70 @@ function bucketByHostAndSide(
 }
 
 /**
+ * The hosts with a flow to or from another pool (a message flow). In TB such a flow leaves the
+ * host by a side, where a row of stood-off nodes would stand in its way, so their nodes keep
+ * to a column beside the host, clear of its middle.
+ */
+function hostsWithFlowsAcrossPools(nodes: Node[], edges?: LayoutData['edges']): Set<string> {
+  const busy = new Set<string>();
+  if (!edges?.length) {
+    return busy;
+  }
+  const model = buildLaneModel(nodes);
+  for (const edge of edges) {
+    const { start, end } = edge;
+    if (typeof start !== 'string' || typeof end !== 'string') {
+      continue;
+    }
+    if (model.poolIdOf(start) !== model.poolIdOf(end)) {
+      busy.add(start);
+      busy.add(end);
+    }
+  }
+  return busy;
+}
+
+/**
+ * In TB, splits a run of stood-off nodes on a host's right side that named no side between
+ * the right and the left side, so each side holds half of it: with one or two nodes a side,
+ * the nearest goes straight into the host. A node that leaves by its left face (a text
+ * annotation's bracket) stays on the right, facing the host, and goes after the others there.
+ */
+function spreadAcrossBothSides(
+  buckets: Map<string, BucketEntry[]>,
+  direction: Direction,
+  busy: Set<string>
+): Map<string, BucketEntry[]> {
+  if (direction !== 'TB') {
+    return buckets;
+  }
+  for (const [key, bucket] of [...buckets]) {
+    const spreadable = bucket.every((entry) => !entry.anchor.side && (entry.anchor.gap ?? 0) > 0);
+    if (
+      bucket[0].side !== 'right' ||
+      bucket.length < 2 ||
+      !spreadable ||
+      busy.has(bucket[0].hostId)
+    ) {
+      continue;
+    }
+    const facing = bucket.filter((entry) => attachFaceOf(entry.node) === 'left');
+    const others = bucket.filter((entry) => attachFaceOf(entry.node) !== 'left');
+    const leftCount = Math.floor(bucket.length / 2);
+    const left = others.filter((_, i) => i % 2 === 0).slice(0, leftCount);
+    const right = [...others.filter((entry) => !left.includes(entry)), ...facing];
+    const hostId = bucket[0].hostId;
+    const leftKey = `left:${hostId}`;
+    buckets.set(key, right);
+    buckets.set(leftKey, [
+      ...(buckets.get(leftKey) ?? []),
+      ...left.map((entry) => ({ ...entry, side: 'left' as AnchorSide })),
+    ]);
+  }
+  return buckets;
+}
+
+/**
  * Where a node's centre lies along its host's border, measured from the host's centre.
  *
  * A flow runs through the middle of the node it joins, so a node standing off the left or
@@ -242,18 +310,126 @@ export interface AnchorFootprint {
   beyond: number;
 }
 
-function footprintOf(bucket: BucketEntry[], side: AnchorSide): AnchorFootprint {
+/**
+ * Whether a run of stood-off nodes beside a TB host is laid out as a row going out from the
+ * host's side rather than as a column along it. A column taller than the host leaves all but
+ * one node above or below it, and their lines nest round its corner; in a row each line is a
+ * short stub or one hop over the nodes nearer the host into its top or bottom face.
+ */
+function laysOutward(
+  bucket: BucketEntry[],
+  side: AnchorSide,
+  direction: Direction,
+  busy: Set<string>
+): boolean {
+  return (
+    direction === 'TB' &&
+    !busy.has(bucket[0].hostId) &&
+    (side === 'left' || side === 'right') &&
+    bucket.length > 0 &&
+    bucket.every((entry) => (entry.anchor.gap ?? 0) > 0 && !entry.anchor.side)
+  );
+}
+
+/** Where each node of an outward row stands: its distance out from the host's border. */
+function rowPushes(bucket: BucketEntry[]): number[] {
+  let cursor = bucket[0].anchor.gap ?? 0;
+  return bucket.map((entry) => {
+    const width = entry.node.width ?? 0;
+    const push = cursor + width / 2;
+    cursor += width + ANCHOR_GAP;
+    return push;
+  });
+}
+
+/**
+ * The room a row takes above its centre line, where the lines from its outer nodes hop over
+ * the nearer ones (their captions are written below them, so the lines go over the top), and
+ * below it.
+ */
+function rowHeights(bucket: BucketEntry[]): { above: number; below: number } {
+  const tallest = Math.max(...bucket.map((entry) => (entry.node.height ?? 0) / 2));
+  const hops = bucket.length - 1;
+  return { above: tallest + (hops > 0 ? ROW_LEVEL_STEP * (hops + 1) : 0), below: tallest };
+}
+
+/** How far apart the lines that hop over a row run, and off the top of the row. */
+const ROW_LEVEL_STEP = 12;
+
+/**
+ * How far to slide a run of stood-off nodes along a top or bottom border from the host's
+ * middle, so that as many of them as can stand in front of the border do, each with a straight
+ * line into it. The least slide that achieves it wins, so a run that fits stays centred.
+ */
+function abreastShift(
+  bucket: BucketEntry[],
+  offsets: number[],
+  side: AnchorSide,
+  hostAlongHalf: number | undefined
+): number {
+  const horizontal = side === 'top' || side === 'bottom';
+  if (!horizontal || hostAlongHalf === undefined) {
+    return 0;
+  }
+  // A lone node that leaves by its left or right face (a text annotation's bracket) stands
+  // with that face over the host's border, a quarter in from its end, so its line is short
+  // and straight.
+  const lone = bucket.length === 1 ? bucket[0] : undefined;
+  const face = lone ? attachFaceOf(lone.node) : undefined;
+  if (lone && (lone.anchor.gap ?? 0) > 0 && (face === 'left' || face === 'right')) {
+    const half = (lone.node.width ?? 0) / 2;
+    const target = face === 'left' ? -hostAlongHalf / 2 + half : hostAlongHalf / 2 - half;
+    return target - offsets[0];
+  }
+  if (bucket.length < 2 || !bucket.every((entry) => (entry.anchor.gap ?? 0) > 0)) {
+    return 0;
+  }
+  // Kept a spacing in from either end, so a line from past that end can still enter beside them.
+  const window = Math.max(0, hostAlongHalf - BORDER_INSET - ENTRY_SPACING);
+  const abreast = (shift: number) =>
+    offsets.filter((offset) => Math.abs(offset + shift) <= window + 1e-6).length;
+  let best = 0;
+  let bestCount = abreast(0);
+  const candidates = offsets.flatMap((offset) => [-window - offset, window - offset]);
+  for (const shift of candidates) {
+    const count = abreast(shift);
+    if (count > bestCount || (count === bestCount && Math.abs(shift) < Math.abs(best) - 1e-6)) {
+      best = shift;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+function footprintOf(
+  bucket: BucketEntry[],
+  side: AnchorSide,
+  direction: Direction = 'TB',
+  hostAlongHalf?: number,
+  busy = new Set<string>()
+): AnchorFootprint {
+  if (laysOutward(bucket, side, direction, busy)) {
+    const pushes = rowPushes(bucket);
+    const last = bucket[bucket.length - 1].node;
+    const { above, below } = rowHeights(bucket);
+    return {
+      before: above,
+      after: below,
+      beyond: pushes[pushes.length - 1] + (last.width ?? 0) / 2,
+    };
+  }
   const horizontal = side === 'top' || side === 'bottom';
   const alongBorder = (node: Node) => (horizontal ? (node.width ?? 0) : (node.height ?? 0));
   const reach = (node: Node) => (horizontal ? (node.height ?? 0) : (node.width ?? 0));
   const { offsets } = packAlongBorder(bucket.map((entry) => alongBorder(entry.node)));
+  const shift = abreastShift(bucket, offsets, side, hostAlongHalf);
   let before = 0;
   let after = 0;
   let beyond = 0;
   bucket.forEach((entry, position) => {
     const clearance = entry.anchor.gap ?? 0;
     const half = alongBorder(entry.node) / 2;
-    const centre = centreAlongBorder(offsets[position], horizontal, clearance, half);
+    const centre = centreAlongBorder(offsets[position], horizontal, clearance, half) + shift;
     before = Math.max(before, half - centre);
     after = Math.max(after, centre + half);
     beyond = Math.max(beyond, clearance > 0 ? clearance + reach(entry.node) : 0);
@@ -267,19 +443,37 @@ function footprintOf(bucket: BucketEntry[], side: AnchorSide): AnchorFootprint {
  */
 export function anchorFootprints(
   nodes: Node[],
-  direction?: Direction
+  direction?: Direction,
+  edges?: LayoutData['edges']
 ): Map<string, Partial<Record<AnchorSide, AnchorFootprint>>> {
+  const busy = hostsWithFlowsAcrossPools(nodes, edges);
   const fallback = defaultAnchorSide('final', direction ?? 'TB');
   const footprints = new Map<string, Partial<Record<AnchorSide, AnchorFootprint>>>();
-  for (const bucket of bucketByHostAndSide(
-    nodes,
-    (anchor) => attachedSide(anchor, direction ?? 'TB') ?? anchor.side ?? fallback
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const hostAlongHalfOf = (hostId: string, side: AnchorSide) => {
+    const host = byId.get(hostId);
+    const size = side === 'top' || side === 'bottom' ? host?.width : host?.height;
+    return typeof size === 'number' && Number.isFinite(size) ? size / 2 : undefined;
+  };
+  for (const bucket of spreadAcrossBothSides(
+    bucketByHostAndSide(
+      nodes,
+      (anchor) => attachedSide(anchor, direction ?? 'TB') ?? anchor.side ?? fallback
+    ),
+    direction ?? 'TB',
+    busy
   ).values()) {
+    if (bucket.length === 0) {
+      continue;
+    }
     if (!bucket.some((entry) => entry.anchor.gap)) {
       continue;
     }
     const { hostId, side } = bucket[0];
-    footprints.set(hostId, { ...footprints.get(hostId), [side]: footprintOf(bucket, side) });
+    footprints.set(hostId, {
+      ...footprints.get(hostId),
+      [side]: footprintOf(bucket, side, direction ?? 'TB', hostAlongHalfOf(hostId, side), busy),
+    });
   }
   return footprints;
 }
@@ -400,7 +594,11 @@ export function pinAnchoredNodes(
   );
 
   const pins: AnchorPin[] = [];
-  for (const bucket of buckets.values()) {
+  const busy = hostsWithFlowsAcrossPools(nodes, layout.edges);
+  for (const bucket of spreadAcrossBothSides(buckets, opts.direction, busy).values()) {
+    if (bucket.length === 0) {
+      continue;
+    }
     const { hostId, side } = bucket[0];
     const host = byId.get(hostId);
     const hx = host?.x;
@@ -430,8 +628,27 @@ export function pinAnchoredNodes(
       ?.width;
     const runExtent =
       bucket.length === 1 && typeof drawnWidth === 'number' && drawnWidth > 0 ? drawnWidth : total;
+    if (laysOutward(bucket, side, opts.direction, busy)) {
+      const pushes = rowPushes(bucket);
+      bucket.forEach((entry, position) => {
+        const x = hx + (side === 'right' ? hw / 2 + pushes[position] : -hw / 2 - pushes[position]);
+        entry.node.x = x;
+        entry.node.y = hy;
+        pins.push({
+          nodeId: entry.node.id,
+          hostId,
+          side,
+          x,
+          y: hy,
+          outward: OUTWARD[side],
+          row: position,
+        });
+      });
+      continue;
+    }
+    const shift = abreastShift(bucket, offsets, side, (horizontal ? hw : hh) / 2);
     bucket.forEach((entry, position) => {
-      const offset = offsets[position];
+      const offset = offsets[position] + shift;
       const clearance = entry.anchor.gap ?? 0;
       const span = ((horizontal ? entry.node.height : entry.node.width) ?? 0) / 2;
       const push = clearance > 0 ? clearance + span : 0;
@@ -488,6 +705,10 @@ function stubToHost(node: Node, host: Node, pin: AnchorPin): { x: number; y: num
   if (!canRoute(node, host)) {
     return null;
   }
+  const straight = straightFromFace(node, host, pin);
+  if (straight) {
+    return straight;
+  }
   const alongX = pin.side === 'top' || pin.side === 'bottom';
   const [nAlong, nAcross] = alongX ? [node.x!, node.y!] : [node.y!, node.x!];
   const [hAlong, hAcross] = alongX ? [host.x!, host.y!] : [host.y!, host.x!];
@@ -509,6 +730,35 @@ function stubToHost(node: Node, host: Node, pin: AnchorPin): { x: number; y: num
   path.push(pointAt(alongX, enter, hAcross));
   return path;
 }
+
+/**
+ * The line from a node that leaves by a side face standing over its host's top or bottom
+ * border: straight from the end of that face nearest the host into the border. Just inside
+ * the face, so the line is not taken for one running along it.
+ */
+function straightFromFace(
+  node: Node,
+  host: Node,
+  pin: AnchorPin
+): { x: number; y: number }[] | undefined {
+  const face = attachFaceOf(node);
+  if ((pin.side !== 'top' && pin.side !== 'bottom') || (face !== 'left' && face !== 'right')) {
+    return undefined;
+  }
+  const edge = node.x! + ((face === 'left' ? -1 : 1) * (node.width ?? 0)) / 2;
+  const x = edge + (face === 'left' ? 1 : -1) * FACE_INSET;
+  const hostHalf = (host.width ?? 0) / 2 - BORDER_INSET;
+  if (Math.abs(x - host.x!) > hostHalf) {
+    return undefined;
+  }
+  return [
+    { x, y: node.y! },
+    { x, y: host.y! },
+  ];
+}
+
+/** How far inside its face a line leaves a node by straightFromFace. */
+const FACE_INSET = 3;
 
 /** Room between neighbouring entry points on a host's border (px). */
 const ENTRY_SPACING = 12;
@@ -533,7 +783,15 @@ interface Stub {
  * at their own depth, the outermost nearest the host: each line then runs outside the
  * ones within it, as nested L shapes do.
  */
-function stubsBesideOneSide(stubs: Stub[]): Map<Stub, { x: number; y: number }[]> {
+function stubsBesideOneSide(
+  stubs: Stub[],
+  blocked: (
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    ownId: string,
+    leaving?: Node
+  ) => boolean = () => false
+): Map<Stub, { x: number; y: number }[]> {
   const paths = new Map<Stub, { x: number; y: number }[]>();
   const { host, pin } = stubs[0];
   const alongX = pin.side === 'top' || pin.side === 'bottom';
@@ -589,15 +847,109 @@ function stubsBesideOneSide(stubs: Stub[]): Map<Stub, { x: number; y: number }[]
       ]);
     }
   };
-  nest(before, low, Math.max(0, firstStraight - low - ENTRY_SPACING), 1);
-  nest(after, high, Math.max(0, high - lastStraight - ENTRY_SPACING), -1);
+  // A node past an end of the side goes round the host's corner into the end face instead,
+  // by one turn: out of the node towards that face, and across into it near the corner. The
+  // node furthest out enters furthest from the corner, so the lines nest without crossing.
+  // That is taken for the whole run past one end, and only where no line meets another
+  // shape; otherwise the run enters the side itself, as above.
+  const hostAcrossHalf = sizeAlong(host, !alongX) / 2;
+  const intoEndFace = (run: typeof placed, endFace: number, step: 1 | -1) => {
+    const room = Math.max(0, hostAcrossHalf - BORDER_INSET);
+    const spacing = run.length > 1 ? Math.min(ENTRY_SPACING, room / run.length) : 0;
+    const ways = run.map(({ stub, nAlong, nAcross }, k) => {
+      const depth = run.length - 1 - k;
+      const enterAcross = hostFace - outward * (BORDER_INSET + depth * spacing);
+      return {
+        stub,
+        clear: (endFace - nAlong) * step > MIN_LEG,
+        path: [
+          pointAt(alongX, nAlong, nAcross),
+          pointAt(alongX, nAlong, enterAcross),
+          pointAt(alongX, hAlong, enterAcross),
+        ],
+      };
+    });
+    const sound = ways.every(
+      ({ stub, clear, path }) =>
+        clear &&
+        path
+          .slice(1)
+          .every((b, i) => !blocked(path[i], b, stub.node.id, i === 0 ? stub.node : undefined))
+    );
+    if (!sound) {
+      return false;
+    }
+    for (const { stub, path } of ways) {
+      paths.set(stub, path);
+    }
+    return true;
+  };
+  const hostAlongHalf = sizeAlong(host, alongX) / 2;
+  if (!intoEndFace(before, hAlong - hostAlongHalf, 1)) {
+    nest(before, low, Math.max(0, firstStraight - low - ENTRY_SPACING), 1);
+  }
+  if (!intoEndFace(after, hAlong + hostAlongHalf, -1)) {
+    nest(after, high, Math.max(0, high - lastStraight - ENTRY_SPACING), -1);
+  }
   return paths;
 }
+
+/**
+ * The lines from a row going out from a TB host's side: the nearest node's goes straight into
+ * the side; each further one rises over the nodes nearer the host, one level higher the
+ * further out it is, and comes down into the host's top face, one step further from the
+ * corner. Each line is then an L with one more turn, and none crosses another.
+ */
+function stubsOfARow(stubs: Stub[]): Map<Stub, { x: number; y: number }[]> {
+  const paths = new Map<Stub, { x: number; y: number }[]>();
+  const sorted = [...stubs].sort((a, b) => (a.pin.row ?? 0) - (b.pin.row ?? 0));
+  const { host, pin } = sorted[0];
+  const outward = pin.side === 'right' ? 1 : -1;
+  const hostFace = host.x! + (outward * (host.width ?? 0)) / 2;
+  const hostTop = host.y! - (host.height ?? 0) / 2;
+  let ceiling = hostTop;
+  sorted.forEach((stub, i) => {
+    const { node } = stub;
+    const x = node.x!;
+    const y = node.y!;
+    if (i === 0) {
+      paths.set(stub, [
+        { x, y },
+        { x: host.x!, y },
+      ]);
+    } else {
+      const level = ceiling - ROW_LEVEL_STEP * i;
+      const enter = hostFace - outward * (BORDER_INSET + (i - 1) * ENTRY_SPACING);
+      // A node that leaves by a side face (a text annotation's bracket) rises from that face.
+      const face = attachFaceOf(node);
+      const half = (node.width ?? 0) / 2;
+      const from =
+        face === 'left' || face === 'right'
+          ? { x: x + (face === 'left' ? -half + FACE_INSET : half - FACE_INSET), y }
+          : { x, y };
+      paths.set(stub, [
+        from,
+        { x: from.x, y: level },
+        { x: enter, y: level },
+        { x: enter, y: host.y! },
+      ]);
+    }
+    ceiling = Math.min(ceiling, y - (node.height ?? 0) / 2);
+  });
+  return paths;
+}
+
+/** How far a line from a stood-off node keeps off other nodes' boxes. */
+const LINE_CLEARANCE = 8;
+
+/** The shortest leg a line into a host's end face runs past the face before it turns. */
+const MIN_LEG = 12;
 
 export function squareAnchoredEdges(layout: LayoutData, pins: AnchorPin[]): void {
   const byId = new Map((layout.nodes ?? []).map((node) => [node.id, node]));
   const pinById = new Map(pins.map((pin) => [pin.nodeId, pin]));
   const bySide = new Map<string, Stub[]>();
+  const rows = new Map<string, Stub[]>();
   for (const edge of layout.edges ?? []) {
     const start = typeof edge.start === 'string' ? edge.start : undefined;
     const end = typeof edge.end === 'string' ? edge.end : undefined;
@@ -616,6 +968,11 @@ export function squareAnchoredEdges(layout: LayoutData, pins: AnchorPin[]): void
     if (!node || !host || !canRoute(node, host)) {
       continue;
     }
+    if (pin.row !== undefined) {
+      const key = `${pin.hostId}\u0000${pin.side}`;
+      rows.set(key, [...(rows.get(key) ?? []), { edge, node, host, pin }]);
+      continue;
+    }
     const alongX = pin.side === 'top' || pin.side === 'bottom';
     // A node that leaves sideways (a text annotation's bracket) keeps its own stub.
     if (leavesSideways(attachFaceOf(node), alongX)) {
@@ -628,8 +985,33 @@ export function squareAnchoredEdges(layout: LayoutData, pins: AnchorPin[]): void
     const key = `${pin.hostId}\u0000${pin.side}`;
     bySide.set(key, [...(bySide.get(key) ?? []), { edge, node, host, pin }]);
   }
+  // Whether a line from a stood-off node runs through another node: a shape or its caption.
+  // The node's own box does not count, nor does the host's, which the line ends on.
+  const others = (layout.nodes ?? []).filter((node) => !node.isGroup && hasUsableSize(node));
+  const blocked = (
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+    ownId: string
+  ): boolean =>
+    others.some((other) => {
+      if (other.id === ownId || pinById.get(ownId)?.hostId === other.id) {
+        return false;
+      }
+      const r = boxOf(other);
+      return (
+        Math.max(a.x, b.x) > r.left - LINE_CLEARANCE &&
+        Math.min(a.x, b.x) < r.right + LINE_CLEARANCE &&
+        Math.max(a.y, b.y) > r.top - LINE_CLEARANCE &&
+        Math.min(a.y, b.y) < r.bottom + LINE_CLEARANCE
+      );
+    });
+  for (const stubs of rows.values()) {
+    for (const [stub, path] of stubsOfARow(stubs)) {
+      stub.edge.points = stub.pin.nodeId === stub.edge.start ? path : [...path].reverse();
+    }
+  }
   for (const stubs of bySide.values()) {
-    for (const [stub, path] of stubsBesideOneSide(stubs)) {
+    for (const [stub, path] of stubsBesideOneSide(stubs, blocked)) {
       stub.edge.points = stub.pin.nodeId === stub.edge.start ? path : [...path].reverse();
     }
   }

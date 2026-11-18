@@ -69,7 +69,7 @@ export function runSwimlaneLayoutCore(data4Layout: LayoutData): SwimlaneDirectio
     gapIsRoomBetween: data4Layout.laneLayering === 'branches',
     straightenChains: data4Layout.laneLayering === 'branches',
   });
-  writeBackToLayoutData(g, ordered, coordinates, { nodeGap, layerGap });
+  writeBackToLayoutData(g, ordered, coordinates, { nodeGap, layerGap, direction });
 
   pinAnchoredNodes(data4Layout, { space: 'canonical', direction });
 

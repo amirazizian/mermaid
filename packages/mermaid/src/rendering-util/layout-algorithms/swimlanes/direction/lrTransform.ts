@@ -522,7 +522,7 @@ export function applyLrDirectionTransform(
   }
 
   const childrenByLane = new Map<string, LayoutNode[]>();
-  const footprints = anchorFootprints(nodes, direction);
+  const footprints = anchorFootprints(nodes, direction, layout.edges);
 
   for (const n of nodes) {
     if (laneModel.isLane(n.id) || laneModel.isPool(n.id) || anchoredIds.has(n.id)) {

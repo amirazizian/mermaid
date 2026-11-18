@@ -232,7 +232,11 @@ export function assignCoordinates(
     extraLayerGaps[rank] += reach;
   }
 
-  const footprints = anchorFootprints(gWithDummies.layout?.nodes ?? [], direction);
+  const footprints = anchorFootprints(
+    gWithDummies.layout?.nodes ?? [],
+    direction,
+    gWithDummies.layout?.edges
+  );
   const trailingSide = defaultAnchorSide('final', direction);
   const reachOn = (side: AnchorSide) => (id: NodeId) => footprints.get(id)?.[side]?.beyond ?? 0;
   const reachAfter = reachOn(trailingSide);
