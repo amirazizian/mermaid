@@ -6,7 +6,7 @@ import { render } from '../../rendering-util/render.js';
 import { setupViewPortForSVG } from '../../rendering-util/setupViewPortForSVG.js';
 import type { LayoutData } from '../../rendering-util/types.js';
 import utils from '../../utils.js';
-import { avoidCaptionCrossings } from './captionPlacement.js';
+import { avoidCaptionCrossings, keepCaptionRoomBeside } from './captionPlacement.js';
 import { decorateFlows } from './flowDecorations.js';
 import { drawSpanningGroups } from './spanningGroups.js';
 
@@ -26,6 +26,9 @@ const prepare = (data: LayoutData, type: string, direction: string, id: string, 
   data.nodeSpacing = conf?.nodeSpacing ?? 35;
   data.rankSpacing = conf?.rankSpacing ?? 40;
   data.diagramId = id;
+  if (direction === 'TB' || direction === 'TD' || direction === 'BT') {
+    keepCaptionRoomBeside(data);
+  }
   return data;
 };
 
