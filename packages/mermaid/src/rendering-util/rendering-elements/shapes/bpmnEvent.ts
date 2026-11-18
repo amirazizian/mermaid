@@ -6,11 +6,13 @@ import { labelHelper, getNodeClasses } from './util.js';
 import { styles2String } from './handDrawnShapeStyles.js';
 import {
   appendGlyph,
+  captionRoomWidth,
   EVENT_DIAMETER,
   EVENT_RINGS,
   ringIntersect,
   ICON_SIZE,
   LABEL_GAP,
+  fitWrappedLabel,
   positionLabelBelow,
   reserveBounds,
   type BpmnNode,
@@ -89,11 +91,12 @@ export async function renderBpmnEvent<T extends SVGGraphicsElement>(
   const strokeWidth = ringWidth(position);
   const radius = EVENT_DIAMETER / 2;
 
-  const { shapeSvg, bbox, label } = await labelHelper(
-    parent,
-    node,
-    getNodeClasses(node, `bpmn-event bpmn-event-${position}`)
-  );
+  const {
+    shapeSvg,
+    bbox: measured,
+    label,
+  } = await labelHelper(parent, node, getNodeClasses(node, `bpmn-event bpmn-event-${position}`));
+  const bbox = fitWrappedLabel(label, measured);
 
   const glyphGroup = shapeSvg.insert('g', ':first-child').attr('class', 'bpmn-event-body');
   glyphGroup.attr('style', nodeStyles);
@@ -109,7 +112,9 @@ export async function renderBpmnEvent<T extends SVGGraphicsElement>(
   const hasLabel = bbox.height > 0 && Boolean(node.label);
   const captionBand = hasLabel ? LABEL_GAP + bbox.height : 0;
   const totalHeight = EVENT_DIAMETER + 2 * captionBand;
-  const totalWidth = Math.max(EVENT_DIAMETER, hasLabel ? bbox.width : 0);
+  const totalWidth = hasLabel
+    ? captionRoomWidth(node, EVENT_DIAMETER, measured.width, bbox.width)
+    : EVENT_DIAMETER;
 
   if (hasLabel) {
     positionLabelBelow(label, bbox, radius + LABEL_GAP + bbox.height / 2);

@@ -74,6 +74,94 @@ export const positionLabelBelow = (
   );
 };
 
+/**
+ * The width the lines of a wrapped HTML label take, or `undefined` where it cannot be measured.
+ * A label wrapped at the wrapping width is drawn in a box of that width, whatever the length of
+ * its longest line, so a caption that wraps would otherwise claim room it does not use.
+ */
+const wrappedTextWidth = (div: HTMLElement): number | undefined => {
+  const doc = div.ownerDocument;
+  if (typeof doc?.createRange !== 'function' || typeof doc.createTreeWalker !== 'function') {
+    return undefined;
+  }
+  // 4 is NodeFilter.SHOW_TEXT.
+  const walker = doc.createTreeWalker(div, 4);
+  let left = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    if (!text.textContent?.trim()) {
+      continue;
+    }
+    const range = doc.createRange();
+    range.selectNodeContents(text);
+    if (typeof range.getClientRects !== 'function') {
+      return undefined;
+    }
+    for (const rect of range.getClientRects()) {
+      if (rect.width > 0) {
+        left = Math.min(left, rect.left);
+        right = Math.max(right, rect.right);
+      }
+    }
+  }
+  return right > left ? right - left : undefined;
+};
+
+/**
+ * Narrows a wrapped HTML caption to its longest line, so that it is drawn, centred and kept
+ * clear of lines by the room its text takes. Returns the label's box, narrowed or as it was.
+ */
+export const fitWrappedLabel = (label: D3Selection<SVGGElement>, bbox: DOMRect): DOMRect => {
+  const foreignObject = label.node()?.querySelector('foreignObject');
+  const div = [...(foreignObject?.children ?? [])].find(
+    (child): child is HTMLElement => child.tagName.toLowerCase() === 'div'
+  );
+  // A label that wraps is given a fixed width and lets its white space break; one that fits on
+  // a line keeps `nowrap`, and one widened to a minimum width keeps it too.
+  const wraps = div && div.style.width !== '' && div.style.whiteSpace !== 'nowrap';
+  if (!foreignObject || !div || !wraps) {
+    return bbox;
+  }
+  const lines = wrappedTextWidth(div);
+  if (lines === undefined || lines >= bbox.width - 1) {
+    return bbox;
+  }
+  const width = Math.ceil(lines) + 1;
+  div.style.width = `${width}px`;
+  foreignObject.setAttribute('width', String(width));
+  const { x, y, height } = bbox;
+  const left = 'left' in bbox ? bbox.left : x;
+  const top = 'top' in bbox ? bbox.top : y;
+  return {
+    x,
+    y,
+    width,
+    height,
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    toJSON: () => ({}),
+  } as DOMRect;
+};
+
+/**
+ * The width a shape with a caption under it keeps for itself: the wrapping width the caption
+ * was measured at, which the caption may move into. With `metadata.captionBeside`, set where
+ * flows run through the place under the shape, it keeps room for the caption on either side.
+ */
+export const captionRoomWidth = (
+  node: Node,
+  size: number,
+  measuredWidth: number,
+  captionWidth: number
+): number =>
+  Math.max(
+    size,
+    measuredWidth,
+    node.metadata?.captionBeside === true ? size + 2 * (LABEL_GAP + captionWidth) : 0
+  );
+
 export const appendGlyph = async (
   group: D3Selection<SVGGElement>,
   icon: string | undefined,

@@ -1,7 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { select } from 'd3';
 import type { Node } from '../../types.js';
 import { isValidShape, shapes } from '../shapes.js';
-import { EVENT_RINGS, faceCentreIntersect } from './bpmnShapeCore.js';
+import {
+  EVENT_RINGS,
+  captionRoomWidth,
+  faceCentreIntersect,
+  fitWrappedLabel,
+} from './bpmnShapeCore.js';
 import { bpmnIcons } from './bpmnIcons.js';
 import bpmnStyles from '../../../diagrams/bpmn/styles.js';
 import type { BpmnStyleOptions } from '../../../diagrams/bpmn/styles.js';
@@ -105,5 +111,66 @@ describe('faceCentreIntersect', () => {
   it('answers on the face the point lies off', () => {
     expect(faceCentreIntersect(node, 80, 40, { x: 400, y: 50 })).toEqual({ x: 140, y: 50 });
     expect(faceCentreIntersect(node, 80, 40, { x: 100, y: -400 })).toEqual({ x: 100, y: 30 });
+  });
+});
+
+describe('caption room', () => {
+  const node = (metadata?: Record<string, unknown>) => ({ id: 'n', metadata }) as Node;
+
+  it('keeps the wrapping width the caption was measured at', () => {
+    expect(captionRoomWidth(node(), 36, 120, 64)).toBe(120);
+    expect(captionRoomWidth(node(), 50, 30, 30)).toBe(50);
+  });
+
+  it('keeps room on both sides for a caption that may move beside the shape', () => {
+    expect(captionRoomWidth(node({ captionBeside: true }), 36, 120, 64)).toBe(36 + 2 * (6 + 64));
+  });
+});
+
+describe('fitWrappedLabel', () => {
+  const wrappedLabel = (whiteSpace: string) => {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    const foreignObject = document.createElementNS('http://www.w3.org/2000/svg', 'foreignObject');
+    foreignObject.setAttribute('width', '120');
+    const div = document.createElement('div');
+    div.innerHTML = '<span><p>Payment method?</p></span>';
+    div.style.whiteSpace = whiteSpace;
+    div.style.width = '120px';
+    foreignObject.append(div);
+    g.append(foreignObject);
+    document.body.append(g);
+    return { label: select(g), div, foreignObject };
+  };
+  const box = { x: 10, y: 5, left: 10, top: 5, width: 120, height: 48 } as DOMRect;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  it('narrows a wrapped caption to its longest line', () => {
+    const { label, div, foreignObject } = wrappedLabel('normal');
+    vi.spyOn(document, 'createRange').mockImplementation(
+      () =>
+        ({
+          selectNodeContents: () => undefined,
+          getClientRects: () => [
+            { left: 38, right: 102, width: 64 },
+            { left: 44, right: 96, width: 52 },
+          ],
+        }) as unknown as Range
+    );
+    const fitted = fitWrappedLabel(label, box);
+    expect(fitted.width).toBe(65);
+    expect(fitted.height).toBe(48);
+    expect(fitted.x - fitted.left).toBe(0);
+    expect(div.style.width).toBe('65px');
+    expect(foreignObject.getAttribute('width')).toBe('65');
+  });
+
+  it('leaves a caption on one line, or one it cannot measure, as it is', () => {
+    expect(fitWrappedLabel(wrappedLabel('nowrap').label, box)).toBe(box);
+    // jsdom lays nothing out, so a range has no rectangles to measure.
+    expect(fitWrappedLabel(wrappedLabel('normal').label, box)).toBe(box);
   });
 });

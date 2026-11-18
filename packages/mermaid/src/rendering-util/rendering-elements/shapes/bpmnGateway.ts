@@ -4,10 +4,12 @@ import { labelHelper, getNodeClasses } from './util.js';
 import { styles2String } from './handDrawnShapeStyles.js';
 import {
   appendGlyph,
+  captionRoomWidth,
   faceCentreIntersect,
   GATEWAY_SIZE,
   ICON_SIZE,
   LABEL_GAP,
+  fitWrappedLabel,
   positionLabelBelow,
   reserveBounds,
   type BpmnNode,
@@ -22,11 +24,12 @@ export async function bpmnGateway<T extends SVGGraphicsElement>(
   node.labelStyle = labelStyles;
   const half = GATEWAY_SIZE / 2;
 
-  const { shapeSvg, bbox, label } = await labelHelper(
-    parent,
-    node,
-    getNodeClasses(node, 'bpmn-gateway')
-  );
+  const {
+    shapeSvg,
+    bbox: measured,
+    label,
+  } = await labelHelper(parent, node, getNodeClasses(node, 'bpmn-gateway'));
+  const bbox = fitWrappedLabel(label, measured);
 
   const glyphGroup = shapeSvg.insert('g', ':first-child').attr('class', 'bpmn-gateway-body');
   glyphGroup
@@ -39,7 +42,9 @@ export async function bpmnGateway<T extends SVGGraphicsElement>(
   const hasLabel = bbox.height > 0 && Boolean(node.label);
   const captionBand = hasLabel ? LABEL_GAP + bbox.height : 0;
   const totalHeight = GATEWAY_SIZE + 2 * captionBand;
-  const totalWidth = Math.max(GATEWAY_SIZE, hasLabel ? bbox.width : 0);
+  const totalWidth = hasLabel
+    ? captionRoomWidth(node, GATEWAY_SIZE, measured.width, bbox.width)
+    : GATEWAY_SIZE;
 
   if (hasLabel) {
     positionLabelBelow(label, bbox, half + LABEL_GAP + bbox.height / 2);

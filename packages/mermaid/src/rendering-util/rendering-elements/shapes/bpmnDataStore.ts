@@ -5,6 +5,7 @@ import { styles2String } from './handDrawnShapeStyles.js';
 import {
   faceProjectIntersect,
   LABEL_GAP,
+  fitWrappedLabel,
   positionLabelBelow,
   reserveBounds,
 } from './bpmnShapeCore.js';
@@ -18,11 +19,12 @@ export async function bpmnDataStore<T extends SVGGraphicsElement>(
   const { labelStyles, nodeStyles } = styles2String(node);
   node.labelStyle = labelStyles;
 
-  const { shapeSvg, bbox, label } = await labelHelper(
-    parent,
-    node,
-    getNodeClasses(node, 'bpmn-data-store')
-  );
+  const {
+    shapeSvg,
+    bbox: measured,
+    label,
+  } = await labelHelper(parent, node, getNodeClasses(node, 'bpmn-data-store'));
+  const bbox = fitWrappedLabel(label, measured);
 
   const body = shapeSvg.insert('g', ':first-child').attr('class', 'bpmn-data-body');
   const half = STORE_SIZE / 2;
@@ -45,7 +47,8 @@ export async function bpmnDataStore<T extends SVGGraphicsElement>(
   const hasLabel = bbox.height > 0 && Boolean(node.label);
   const captionBand = hasLabel ? LABEL_GAP + bbox.height : 0;
   const totalHeight = STORE_SIZE + 2 * captionBand;
-  const totalWidth = Math.max(STORE_SIZE, hasLabel ? bbox.width : 0);
+  // The room the layout keeps is the wrapping width, which the caption may move into.
+  const totalWidth = Math.max(STORE_SIZE, hasLabel ? measured.width : 0);
 
   if (hasLabel) {
     positionLabelBelow(label, bbox, half + LABEL_GAP + bbox.height / 2);
