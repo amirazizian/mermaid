@@ -29,10 +29,10 @@ export const CROSSING_COST = 90;
 export const SHARED_TRACK_COST = 6;
 /** What running along another shape's side, closer than HUG_GAP, costs, and per pixel. */
 const HUG_COST = 120;
-const HUG_GAP = 10;
+const HUG_GAP = 16;
 /** What running along the node's own shape, closer than OWN_HUG_GAP, costs. */
 const OWN_HUG_COST = 40;
-const OWN_HUG_GAP = 16;
+const OWN_HUG_GAP = 24;
 /**
  * What taking the bottom vertex of a node that writes its caption below costs. The caption can
  * move aside, so the vertex is not barred; it is used where it saves more than this.
@@ -41,7 +41,7 @@ export const CAPTION_VERTEX_COST = 60;
 
 const EPS = 1e-6;
 /** A way that meets a flat far end closer than this to a corner of it costs NEAR_CORNER_COST. */
-const NEAR_CORNER = 16;
+const NEAR_CORNER = 24;
 const NEAR_CORNER_COST = 40;
 /** What a way costs that leaves its vertex away from where it ends, and turns back round. */
 const TURNS_BACK_COST = 400;

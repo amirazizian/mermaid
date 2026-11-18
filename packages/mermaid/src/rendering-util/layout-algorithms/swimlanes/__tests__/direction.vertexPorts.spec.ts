@@ -213,3 +213,27 @@ describe('a vertex way that turns back', () => {
     expect(lowerLeft.points.at(-1)).not.toEqual({ x: 18, y: 0 });
   });
 });
+
+describe('a gateway branching to both sides below it', () => {
+  it('leaves by the side vertices, not down past a target and hooking into its side', () => {
+    // Down from the bottom vertex and in by the near side of the lower-left task is the
+    // shortest way, but it runs down beside that task and hooks into its face near a corner.
+    const wide = { ...gateway, x: 0, y: 263, width: 235, height: 110 };
+    const lowerLeft = flat('l', -85, 454, 131, 80);
+    const lowerRight = flat('r', 83, 454, 136, 80);
+    const above = flat('a', 0, 96, 120, 80);
+    const incoming = edge('in', 'a', 'g', { x: 0, y: 136 }, { x: 0, y: 238 });
+    const right = edge(
+      'right',
+      'g',
+      'r',
+      { x: 25, y: 263 },
+      { x: 117, y: 263 },
+      { x: 117, y: 414 }
+    );
+    const left = edge('left', 'g', 'l', { x: 0, y: 288 }, { x: 0, y: 430 }, { x: -20, y: 430 });
+    meetDiamondsAtTheirVertex([incoming, right, left], nodes(wide, lowerLeft, lowerRight, above));
+    expect(left.points[0]).toEqual({ x: -25, y: 263 });
+    expect(right.points[0]).toEqual({ x: 25, y: 263 });
+  });
+});
