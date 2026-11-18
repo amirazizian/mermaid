@@ -1,0 +1,28 @@
+bpmn-beta LR
+title Default, conditional and message flows
+  pool shop "Shop"
+    lane "Orders"
+      start s1 "Order placed"
+      service task t1 "Price the order"
+      xor g1 "Payment method?"
+      service task card "Charge card"
+      task invoice "Send invoice"
+      user task review "Manual review"
+      end e1 "Order paid"
+      note n1 "Limits from the risk policy"
+  pool bank "Bank"
+  s1 --> t1 --> g1
+  t1 big@--> review
+  big@{ condition: "total > 5000" }
+  g1 c1@-- card --> card
+  g1 inv@--> invoice
+  inv@{ default: true }
+  card --> e1
+  invoice --> e1
+  review --> e1
+  card m1@-.-> bank
+  m1@{ label: "Charge", message: initiating }
+  bank m2@-.-> e1
+  m2@{ label: "Receipt", message: non-initiating }
+  n1 a1@... review
+  a1@{ direction: both }

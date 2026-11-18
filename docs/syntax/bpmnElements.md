@@ -239,8 +239,28 @@ one it was joined to first.
 | `a ..> b`        | Association, directed   | Dotted, open head                            |
 | `a ... b`        | Association             | Dotted, no head                              |
 
-Only the sequence flow takes a label, and only in the `-- text -->` form. There is no `|text|`
-form, and no labelled form of `-.->`, `..>` or `...`.
+A sequence flow is labelled in its arrow, `-- text -->`. There is no `|text|` form. Any flow,
+a message flow or an association included, can be labelled with its `label` attribute.
+
+### Flow ids and attributes
+
+A flow takes an id written straight before its arrow, `a f1@--> b`, and its attributes in a
+statement of their own, `f1@{ ... }`. See [Flow ids and flow attributes](./bpmn.md#flow-ids-and-flow-attributes).
+
+| Written                                            | Element                              | Drawn as                                 |
+| -------------------------------------------------- | ------------------------------------ | ---------------------------------------- |
+| `g f1@--> b` and `f1@{ default: true }`            | Default flow                         | Slash across the line at its source      |
+| `t f1@--> b` and `f1@{ condition: "x > 1" }`       | Conditional flow from an activity    | Small diamond at its source, and a label |
+| `g f1@--> b` and `f1@{ condition: "x > 1" }`       | Condition on a gateway's branch      | Label only                               |
+| `a m1@-.-> b` and `m1@{ label: "Order" }`          | Labelled message flow                | Label on the line                        |
+| `a m1@-.-> b` and `m1@{ message: initiating }`     | Message flow with its message        | White envelope on the line               |
+| `a m1@-.-> b` and `m1@{ message: non-initiating }` | Message flow, non-initiating message | Shaded envelope on the line              |
+| `n a1@... t` and `a1@{ direction: both }`          | Association in both directions       | Open heads at both ends                  |
+| `n a1@... t` and `a1@{ label: "why" }`             | Labelled association                 | Label on the line                        |
+
+The attribute names follow BPMN 2.0.2: a gateway's or an activity's `default` flow, a sequence
+flow's `conditionExpression`, a message flow's `messageRef` (whose message is initiating or
+not), and an association's `associationDirection` (`None`, `One` or `Both`).
 
 Flows chain, and a chain may mix kinds: `a --> b -.-> c` is a sequence flow followed by a message flow. Both
 ends must be bare ids - an element cannot be declared inside a flow.
@@ -326,18 +346,22 @@ write yet.
 
 ### Flows and data
 
-| Element                     | Status     | Written                                               |
-| --------------------------- | ---------- | ----------------------------------------------------- |
-| Sequence flow               | Supported  | `a --> b`                                             |
-| Conditional flow            | Workaround | Label the flow out of a gateway: `g -- yes --> b`     |
-| Default flow                | None       | The notation marks it with a tick; there is no syntax |
-| Message flow                | Supported  | `a -.-> b`                                            |
-| Association                 | Supported  | `a ..> b`, `a ... b`                                  |
-| Data association            | Supported  | An association to or from a data artifact             |
-| Data object, and collection | Supported  | `data`, `data-collection`                             |
-| Data object state           | Supported  | `data d "..." @{ state: approved }`                   |
-| Data input, and output      | Supported  | `data-input`, `data-output`                           |
-| Data store                  | Supported  | `data-store`                                          |
+| Element                     | Status    | Written                                           |
+| --------------------------- | --------- | ------------------------------------------------- |
+| Sequence flow               | Supported | `a --> b`                                         |
+| Conditional flow            | Supported | `t f1@--> b` and `f1@{ condition: "..." }`        |
+| Default flow                | Supported | `g f1@--> b` and `f1@{ default: true }`           |
+| Message flow                | Supported | `a -.-> b`                                        |
+| Message flow, labelled      | Supported | `a m1@-.-> b` and `m1@{ label: "..." }`           |
+| Message on a message flow   | Supported | `m1@{ message: initiating }`, or `non-initiating` |
+| Association                 | Supported | `a ..> b`, `a ... b`                              |
+| Association, bidirectional  | Supported | `a a1@... b` and `a1@{ direction: both }`         |
+| Association, labelled       | Supported | `a a1@... b` and `a1@{ label: "..." }`            |
+| Data association            | Supported | An association to or from a data artifact         |
+| Data object, and collection | Supported | `data`, `data-collection`                         |
+| Data object state           | Supported | `data d "..." @{ state: approved }`               |
+| Data input, and output      | Supported | `data-input`, `data-output`                       |
+| Data store                  | Supported | `data-store`                                      |
 
 ### Swimlanes and artifacts
 
@@ -361,7 +385,7 @@ has syntax here.
 Only one error is reported, and the diagram is replaced by the error diagram: a word or a
 statement that cannot be read, if there is one, and otherwise the first written of the errors
 below it. An attribute block left open on its line is the exception: nothing written after it
-is reported, a word or a statement that cannot be read included. There are eleven kinds. Every
+is reported, a word or a statement that cannot be read included. There are twelve kinds. Every
 message names the line and the column of the statement it refuses, or of the word in it that is
 refused (the trigger, the repeated id, the id a flow starts from, the attribute key or the
 attribute block), except that a lexing error also lists the character range. The line is a line
@@ -448,6 +472,19 @@ BPMN error at line N, column C: the attributes block opened here runs on to the 
 
 ```txt
 BPMN error at line N, column C: the flow "a --> ghost" refers to "ghost", which is not declared. Declare it as an element before using it.
+```
+
+**A flow id or flow attribute that does not fit.** A flow id is declared once and is not an
+element's id; a statement names a flow that has that id and is written once per flow; each key
+fits the kind of flow and the element it leaves:
+
+```txt
+BPMN error at line N, column C: the flow id "f1" is already declared. Give each flow its own id.
+BPMN error at line N, column C: no flow has the id "f2". Write the id before the arrow of the flow, as f1@-->.
+BPMN error at line N, column C: message is written on a message flow, not on a sequence flow.
+BPMN error at line N, column C: a default flow leaves an activity or an xor, or or complex gateway, not an and gateway ("p").
+BPMN error at line N, column C: "g" already has the default flow "f1", so "f2" cannot be one too.
+BPMN error at line N, column C: a default flow is taken when no condition holds, so it cannot carry a condition of its own.
 ```
 
 ## What it does not check

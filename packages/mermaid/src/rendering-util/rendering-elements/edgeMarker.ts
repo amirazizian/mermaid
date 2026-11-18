@@ -44,6 +44,8 @@ const arrowTypesMap = {
   arrow_circle: { type: 'circle', fill: false },
   arrow_open_head: { type: 'openArrow', fill: false },
   arrow_hollow_circle: { type: 'hollowCircle', fill: false },
+  arrow_slash: { type: 'slash', fill: false },
+  arrow_small_diamond: { type: 'smallDiamond', fill: false },
   arrow_hierarchy: { type: 'hierarchy', fill: false },
   aggregation: { type: 'aggregation', fill: false },
   extension: { type: 'extension', fill: false },

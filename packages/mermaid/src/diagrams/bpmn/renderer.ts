@@ -7,6 +7,7 @@ import { setupViewPortForSVG } from '../../rendering-util/setupViewPortForSVG.js
 import type { LayoutData } from '../../rendering-util/types.js';
 import utils from '../../utils.js';
 import { avoidCaptionCrossings } from './captionPlacement.js';
+import { decorateFlows } from './flowDecorations.js';
 
 export const getClasses = function (
   _text: string,
@@ -33,6 +34,7 @@ export const draw = async function (_text: string, id: string, _version: string,
   data4Layout.diagramId = id;
   await render(data4Layout, svg);
   avoidCaptionCrossings(svg.node());
+  decorateFlows(svg.node());
 
   const padding = conf?.diagramPadding ?? 12;
   const drawnTop = (svg.node() as SVGGraphicsElement | null)?.getBBox().y ?? 0;

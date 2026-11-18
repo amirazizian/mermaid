@@ -141,6 +141,35 @@ const drawnAs = (node: ParsedNode): Drawn => {
   }
 };
 
+/** The head at a flow's target: filled for a sequence flow, open for a message or a directed association. */
+const arrowAtEnd = (flow: ParsedFlow): string =>
+  flow.kind === 'sequence'
+    ? 'arrow_point'
+    : flow.kind === 'message' || flow.directed
+      ? 'arrow_open_head'
+      : 'none';
+
+/**
+ * The mark at a flow's source: the ring of a message flow, the slash of a default flow, the
+ * small diamond of a conditional flow out of an activity (out of a gateway its condition is
+ * only a label), and the second head of an association drawn in both directions.
+ */
+const arrowAtStart = (flow: ParsedFlow, source: ParsedNode | undefined): string => {
+  if (flow.kind === 'message') {
+    return 'arrow_hollow_circle';
+  }
+  if (flow.bidirectional) {
+    return 'arrow_open_head';
+  }
+  if (flow.isDefault) {
+    return 'arrow_slash';
+  }
+  if (flow.condition !== undefined && source?.kind === 'activity') {
+    return 'arrow_small_diamond';
+  }
+  return 'none';
+};
+
 const emptyDiagram = (): ParsedDiagram => ({ direction: 'LR', nodes: [], flows: [] });
 
 export class BpmnDb {
@@ -290,29 +319,33 @@ export class BpmnDb {
       }
     }
 
+    const nodeById = new Map(this.parsed.nodes.map((node) => [node.id, node]));
     for (const [index, flow] of this.parsed.flows.entries()) {
       edges.push({
         id: `bpmn-edge-${index}`,
         start: flow.from,
         end: flow.to,
         type: 'normal',
-        label: flow.label ?? '',
+        label: flow.label ?? flow.condition ?? '',
         labelType: 'string',
         labelpos: 'c',
         thickness: 'normal',
         pattern: EDGE_PATTERNS[flow.kind],
-        arrowTypeEnd:
-          flow.kind === 'sequence'
-            ? 'arrow_point'
-            : flow.kind === 'message' || flow.directed
-              ? 'arrow_open_head'
-              : 'none',
-        arrowTypeStart: flow.kind === 'message' ? 'arrow_hollow_circle' : 'none',
+        arrowTypeEnd: arrowAtEnd(flow),
+        arrowTypeStart: arrowAtStart(flow, nodeById.get(flow.from)),
         style: [],
         labelStyle: [],
-        classes: `bpmn-flow bpmn-flow-${flow.kind}`,
+        classes: [
+          'bpmn-flow',
+          `bpmn-flow-${flow.kind}`,
+          ...(flow.isDefault ? ['bpmn-flow-default'] : []),
+          ...(flow.condition !== undefined ? ['bpmn-flow-conditional'] : []),
+          ...(flow.message ? [`bpmn-flow-message-${flow.message}`] : []),
+        ].join(' '),
         look,
-      } satisfies Edge);
+        ...(flow.id ? { flowId: flow.id } : {}),
+        ...(flow.message ? { message: flow.message } : {}),
+      } satisfies Edge & { flowId?: string; message?: string });
     }
 
     return {
@@ -323,7 +356,7 @@ export class BpmnDb {
       layoutAlgorithm: 'swimlane',
       laneLayering: 'branches',
       diagramId: this.diagramId,
-      markers: ['point', 'circle', 'cross', 'openArrow', 'hollowCircle'],
+      markers: ['point', 'circle', 'cross', 'openArrow', 'hollowCircle', 'slash', 'smallDiamond'],
       type: 'bpmn',
     } satisfies LayoutData;
   }

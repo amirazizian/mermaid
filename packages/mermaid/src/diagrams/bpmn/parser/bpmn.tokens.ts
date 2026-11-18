@@ -157,6 +157,15 @@ export const AssociationArrow = createToken({ name: 'AssociationArrow', pattern:
 
 export const AssociationLine = createToken({ name: 'AssociationLine', pattern: /\.\.\.+/ });
 
+/**
+ * A flow's id, written straight before its arrow as `f1@-->`, the way a flowchart names an
+ * edge. The flow's attributes are then written in a statement of their own, `f1@{ ... }`.
+ */
+export const EdgeId = createToken({
+  name: 'EdgeId',
+  pattern: /[A-Z_a-z]\w*(?:-\w+)*@(?=--|-\.->|\.\.)/,
+});
+
 export const bpmnTokens: TokenType[] = [
   Indent,
   Newline,
@@ -167,6 +176,7 @@ export const bpmnTokens: TokenType[] = [
   Arrow,
   AssociationArrow,
   AssociationLine,
+  EdgeId,
   Title,
   AccTitle,
   AccDescrMultiline,

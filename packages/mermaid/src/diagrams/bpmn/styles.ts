@@ -37,6 +37,8 @@ export interface BpmnStyleOptions {
   textColor: string;
   titleColor: string;
   border2: string;
+  /** The diagram's background, which a hollow marker or an envelope is filled with. */
+  background?: string;
 }
 
 const fade = (color: string, opacity: number) => {
@@ -263,8 +265,30 @@ const getStyles = (options: BpmnStyleOptions) => {
     fill: none;
     stroke: ${messageStroke};
   }
+  .marker.slash {
+    fill: none;
+    stroke: ${edgeStroke};
+  }
+  .marker.smallDiamond {
+    fill: ${options.background ?? 'white'};
+    stroke: ${edgeStroke};
+  }
   .arrowheadPath {
     fill: ${edgeStroke};
+  }
+
+  .bpmn-envelope .bpmn-envelope-body {
+    fill: ${options.background ?? 'white'};
+    stroke: none;
+  }
+  .bpmn-envelope.non-initiating .bpmn-envelope-shade {
+    fill: ${fade(messageStroke, 0.35)};
+    stroke: none;
+  }
+  .bpmn-envelope .bpmn-envelope-flap {
+    fill: none;
+    stroke: ${messageStroke};
+    stroke-width: 1.4px;
   }
 
   .edgeLabel {

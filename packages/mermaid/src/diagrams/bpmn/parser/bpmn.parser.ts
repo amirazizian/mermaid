@@ -44,6 +44,7 @@ class BpmnParser extends CstParser {
         { ALT: () => this.SUBRULE(this.activity) },
         { ALT: () => this.SUBRULE(this.artifact) },
         { ALT: () => this.SUBRULE(this.meta) },
+        { ALT: () => this.SUBRULE(this.flowAttributes) },
         { ALT: () => this.SUBRULE(this.flow) },
       ])
     );
@@ -118,9 +119,16 @@ class BpmnParser extends CstParser {
     this.OPTION3(() => this.CONSUME(t.Attributes));
   });
 
+  /** `f1@{ ... }`: the attributes of the flow written with the id `f1`. */
+  private flowAttributes = this.RULE('flowAttributes', () => {
+    this.CONSUME(t.Identifier);
+    this.CONSUME(t.Attributes);
+  });
+
   private flow = this.RULE('flow', () => {
     this.CONSUME(t.Identifier);
     this.AT_LEAST_ONE(() => {
+      this.OPTION(() => this.CONSUME(t.EdgeId));
       this.OR([
         { ALT: () => this.CONSUME(t.LabelledArrow) },
         { ALT: () => this.CONSUME(t.MessageArrow) },
@@ -180,7 +188,18 @@ export interface ParsedFlow {
   label?: string;
   kind: 'sequence' | 'message' | 'association';
 
+  /** The id written before the flow's arrow, as `f1@-->`; absent when none is written. */
+  id?: string;
+  /** An association with an arrowhead at its target end (`..>`, or `direction: one`). */
   directed?: boolean;
+  /** An association with arrowheads at both ends, `direction: both`. */
+  bidirectional?: boolean;
+  /** A sequence flow taken when no other leaving its source is: `default: true`. */
+  isDefault?: boolean;
+  /** A sequence flow's condition, `condition: "..."`, drawn as its label when it has no other. */
+  condition?: string;
+  /** The message a message flow carries, drawn as an envelope on the line. */
+  message?: 'initiating' | 'non-initiating';
 }
 
 export interface ParsedDiagram {
@@ -280,6 +299,14 @@ class BpmnVisitor extends BpmnBaseVisitor {
   private accDescr: string | undefined;
   private generated = 0;
   private declared = new Set<string>();
+  /** The flows given an id, by that id. */
+  private flowIds = new Map<string, ParsedFlow>();
+  /** The `f1@{ ... }` statements, applied once every flow has been read. */
+  private flowStatements: {
+    id: string;
+    at?: Location;
+    attributes?: WrittenAttributes | UnreadableAttributes;
+  }[] = [];
 
   private baseLevel: number | undefined;
   /** The errors found while reading, each with the place it names, or else where its statement starts. */
@@ -308,6 +335,8 @@ class BpmnVisitor extends BpmnBaseVisitor {
     this.accDescr = undefined;
     this.generated = 0;
     this.declared = new Set();
+    this.flowIds = new Map();
+    this.flowStatements = [];
     this.baseLevel = undefined;
     this.problems = [];
   }
@@ -367,7 +396,18 @@ class BpmnVisitor extends BpmnBaseVisitor {
       : this.declared;
     for (const flow of this.flows) {
       this.attempt(written.get(flow), () => assertFlowRefersToDeclaredElements(flow, declared));
+      if (flow.id) {
+        const id = flow.id;
+        this.attempt(written.get(flow), () => {
+          if (this.declared.has(id)) {
+            throw new Error(
+              `BPMN error${atText(flowIdLocation.get(flow))}: "${id}" is already declared as an element. Give the flow an id of its own.`
+            );
+          }
+        });
+      }
     }
+    this.applyFlowStatements();
     this.throwFirstProblem();
   }
 
@@ -394,6 +434,11 @@ class BpmnVisitor extends BpmnBaseVisitor {
         this.nodes.push(node);
         return;
       }
+    }
+    const statement = (ctx.flowAttributes as CstNode[] | undefined)?.[0];
+    if (statement) {
+      this.visit(statement);
+      return;
     }
     const flow = (ctx.flow as CstNode[] | undefined)?.[0];
     if (flow) {
@@ -527,6 +572,7 @@ class BpmnVisitor extends BpmnBaseVisitor {
       ...(ctx.AssociationArrow ?? []),
       ...(ctx.AssociationLine ?? []),
     ].sort(byOffset);
+    const edgeIds = ctx.EdgeId ?? [];
 
     for (const [index, connector] of connectors.entries()) {
       const from = ids[index];
@@ -544,7 +590,83 @@ class BpmnVisitor extends BpmnBaseVisitor {
         label: name === 'LabelledArrow' ? arrowLabel(connector.image) : undefined,
       };
       remember(parsedFlow, from);
+      const idToken = edgeIds.find(
+        (token) => token.startOffset + token.image.length === connector.startOffset
+      );
+      if (idToken) {
+        const id = idToken.image.slice(0, -1);
+        const where = locationOf(idToken);
+        if (where) {
+          flowIdLocation.set(parsedFlow, where);
+        }
+        if (this.flowIds.has(id)) {
+          this.problems.push({
+            at: where,
+            error: new Error(
+              `BPMN error${atText(where)}: the flow id "${id}" is already declared. Give each flow its own id.`
+            ),
+          });
+        } else {
+          parsedFlow.id = id;
+          this.flowIds.set(id, parsedFlow);
+        }
+      }
       this.flows.push(parsedFlow);
+    }
+  }
+
+  public flowAttributes(ctx: Record<string, IToken[]>) {
+    const idToken = ctx.Identifier[0];
+    this.flowStatements.push({
+      id: idToken.image,
+      at: locationOf(idToken),
+      attributes: readAttributes(ctx.Attributes[0]),
+    });
+  }
+
+  /** Applies each `f1@{ ... }` statement to the flow it names, once every flow is known. */
+  private applyFlowStatements() {
+    const applied = new Map<string, Location | undefined>();
+    const sourceOf = (flow: ParsedFlow) => this.nodes.find((node) => node.id === flow.from);
+    for (const statement of this.flowStatements) {
+      this.attempt(statement.at, () => {
+        const flow = this.flowIds.get(statement.id);
+        if (!flow) {
+          const element = this.declared.has(statement.id)
+            ? ` "${statement.id}" is an element; an element's attributes are written at the end of its own line.`
+            : ' Write the id before the arrow of the flow, as f1@-->.';
+          throw new Error(
+            `BPMN error${atText(statement.at)}: no flow has the id "${statement.id}".${element}`
+          );
+        }
+        if (applied.has(statement.id)) {
+          const first = applied.get(statement.id);
+          throw new Error(
+            `BPMN error${atText(statement.at)}: the attributes of the flow "${statement.id}" are already written${first ? ` at line ${first.line}` : ''}. Write them in one statement.`
+          );
+        }
+        applied.set(statement.id, statement.at);
+        if (statement.attributes) {
+          applyFlowAttributes(flow, statement.attributes, sourceOf(flow));
+        }
+      });
+    }
+    // A source has at most one default flow.
+    const defaults = new Map<string, ParsedFlow>();
+    for (const flow of this.flows) {
+      if (!flow.isDefault) {
+        continue;
+      }
+      const earlier = defaults.get(flow.from);
+      if (earlier) {
+        this.attempt(written.get(flow), () => {
+          throw new Error(
+            `BPMN error${atText(written.get(flow))}: "${flow.from}" already has the default flow "${earlier.id}", so "${flow.id}" cannot be one too.`
+          );
+        });
+      } else {
+        defaults.set(flow.from, flow);
+      }
     }
   }
 
@@ -941,6 +1063,121 @@ function applyAttributes(node: ParsedNode): void {
         break;
       }
     }
+  }
+}
+
+/** Where a flow's id is written, for an error about the id. */
+const flowIdLocation = new WeakMap<ParsedFlow, Location>();
+
+/** The attributes a flow takes in its `f1@{ ... }` statement. */
+export const FLOW_ATTRIBUTES = ['default', 'condition', 'label', 'message', 'direction'] as const;
+export const MESSAGE_KINDS = ['initiating', 'non-initiating'] as const;
+export const ASSOCIATION_DIRECTIONS = ['none', 'one', 'both'] as const;
+
+const FLOW_NAMES: Record<ParsedFlow['kind'], string> = {
+  sequence: 'a sequence flow',
+  message: 'a message flow',
+  association: 'an association',
+};
+
+/** The gateways a default or conditional flow may leave; a parallel or event-based one decides nothing. */
+const DECIDING_GATEWAYS = new Set(['xor', 'or', 'complex']);
+
+/** Whether a sequence flow out of `source` may carry a condition or be its default. */
+const decides = (source: ParsedNode | undefined): boolean =>
+  source?.kind === 'activity' ||
+  (source?.kind === 'gateway' && DECIDING_GATEWAYS.has(source.keyword));
+
+/** Checks a flow's `f1@{ ... }` statement against the kind of flow it names, and records each value. */
+function applyFlowAttributes(
+  flow: ParsedFlow,
+  attributes: WrittenAttributes | UnreadableAttributes,
+  source: ParsedNode | undefined
+): void {
+  if ('unreadable' in attributes) {
+    throw attributes.unreadable;
+  }
+  const allowed = FLOW_ATTRIBUTES as readonly string[];
+  const name = FLOW_NAMES[flow.kind];
+  const sourceName = source ? `${describe(source)} ("${source.id}")` : `"${flow.from}"`;
+  for (const [key, value] of entriesInWrittenOrder(attributes)) {
+    const where = `BPMN error${atText(keyLocation(attributes, key))}`;
+    if (!allowed.includes(key)) {
+      throw new Error(
+        `${where}: "${shown(key)}" is not an attribute of a flow, which takes ${listOf([...allowed])}.`
+      );
+    }
+    const wrongValue = (expected: string) =>
+      new Error(`${where}: ${key} takes ${expected}, not ${shownValue(value)}.`);
+    const onlyOn = (kind: ParsedFlow['kind']) => {
+      if (flow.kind !== kind) {
+        throw new Error(`${where}: ${key} is written on ${FLOW_NAMES[kind]}, not on ${name}.`);
+      }
+    };
+    switch (key) {
+      case 'default':
+        if (!isBoolean(value)) {
+          throw wrongValue('true or false');
+        }
+        onlyOn('sequence');
+        if (value && !decides(source)) {
+          throw new Error(
+            `${where}: a default flow leaves an activity or an xor, or or complex gateway, not ${sourceName}.`
+          );
+        }
+        flow.isDefault = value;
+        break;
+      case 'condition': {
+        const condition = typeof value === 'number' ? asWritten(attributes, key, value) : value;
+        if (typeof condition !== 'string' || !condition.trim()) {
+          throw wrongValue('the condition as text');
+        }
+        onlyOn('sequence');
+        if (!decides(source)) {
+          throw new Error(
+            `${where}: a conditional flow leaves an activity or an xor, or or complex gateway, not ${sourceName}.`
+          );
+        }
+        flow.condition = condition.trim();
+        break;
+      }
+      case 'label': {
+        const label = typeof value === 'number' ? asWritten(attributes, key, value) : value;
+        if (typeof label !== 'string' || !label.trim()) {
+          throw wrongValue('the label as text');
+        }
+        if (flow.label !== undefined) {
+          throw new Error(
+            `${where}: the flow is already labelled "${flow.label}" in its arrow. Write its label once.`
+          );
+        }
+        flow.label = label.trim();
+        break;
+      }
+      case 'message':
+        if (typeof value !== 'string' || !(MESSAGE_KINDS as readonly string[]).includes(value)) {
+          throw wrongValue(listOf([...MESSAGE_KINDS]));
+        }
+        onlyOn('message');
+        flow.message = value as ParsedFlow['message'];
+        break;
+      case 'direction':
+        if (
+          typeof value !== 'string' ||
+          !(ASSOCIATION_DIRECTIONS as readonly string[]).includes(value)
+        ) {
+          throw wrongValue(listOf([...ASSOCIATION_DIRECTIONS]));
+        }
+        onlyOn('association');
+        flow.directed = value !== 'none';
+        flow.bidirectional = value === 'both';
+        break;
+    }
+  }
+  if (flow.isDefault && flow.condition !== undefined) {
+    throw new Error(
+      `BPMN error${atText(attributes.at)}: a default flow is taken when no condition holds, so it cannot carry a condition of its own.`
+    );
   }
 }
 

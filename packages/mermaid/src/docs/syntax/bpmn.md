@@ -288,6 +288,59 @@ bpmn-beta LR
   t2 --> e1
 ```
 
+### Flow ids and flow attributes
+
+A flow takes an id written straight before its arrow, with an `@` and no space: `g f1@--> a`,
+`g f2@-- yes --> b`, `a m1@-.-> b`, `n a1@... t`. In a chain each arrow takes its own id. The
+id is how the flow's attributes are written, in a statement of their own, as flowcharts write
+an edge's: `f1@{ key: value }`, on its own line, before or after the flow.
+
+| Attribute   | On              | Values                           | Drawn as                                                                 |
+| ----------- | --------------- | -------------------------------- | ------------------------------------------------------------------------ |
+| `default`   | a sequence flow | `true` or `false`                | A slash across the line at its source                                    |
+| `condition` | a sequence flow | the condition as text            | Its label; out of an activity, also a small diamond at the source        |
+| `label`     | any flow        | text                             | A label on the line                                                      |
+| `message`   | a message flow  | `initiating` or `non-initiating` | An envelope on the line, white when initiating and shaded when it is not |
+| `direction` | an association  | `none`, `one` or `both`          | No head, a head at the target, or heads at both ends                     |
+
+```mermaid-example
+bpmn-beta LR
+  pool shop "Shop"
+    lane "Orders"
+      service task t1 "Price the order"
+      xor g1 "Payment method?"
+      service task card "Charge card"
+      task invoice "Send invoice"
+      user task review "Manual review"
+  pool bank "Bank"
+  t1 --> g1
+  t1 big@--> review
+  big@{ condition: "total > 5000" }
+  g1 c1@-- card --> card
+  g1 inv@--> invoice
+  inv@{ default: true }
+  card m1@-.-> bank
+  m1@{ label: "Charge", message: initiating }
+```
+
+The rules come from BPMN 2.0.2, and a statement that breaks one is refused with the line and
+the column of the key:
+
+- A default or conditional flow leaves an activity, or an `xor`, `or` or `complex` gateway. A
+  parallel or an event-based gateway does not decide between its flows, and neither does an
+  event.
+- A source has at most one default flow, and a default flow carries no condition, since it is
+  the one taken when no condition holds.
+- A conditional flow out of a gateway is drawn with its condition as its label only, as the
+  notation draws it; one out of an activity also gets the diamond.
+- A flow labelled in its arrow, `-- yes -->`, keeps that label; writing `label` for it too is
+  refused. A `condition` on such a flow is kept but not drawn.
+- A flow id is declared once and is not the id of an element, and each flow's attributes are
+  written in one statement.
+
+`direction` follows BPMN's `associationDirection`. It overrides the arrow it is written on, so
+`..>` with `direction: none` has no head.
+
 ## Artifacts
 
 Artifacts carry information without taking part in the flow.
@@ -392,7 +445,7 @@ bpmn-beta LR
 
 ## What this beta covers
 
-`bpmn-beta` draws BPMN 2.0.2 process and collaboration diagrams: pools and lanes, events with all thirteen triggers, the five gateway types, tasks with their task types, collapsed sub-processes and call activities, boundary events, sequence and message flows, associations, data objects and stores, text annotations and groups. The [BPMN element reference](./bpmnElements.md) lists every BPMN 2.0 element as supported, reachable through a workaround, or not written yet.
+`bpmn-beta` draws BPMN 2.0.2 process and collaboration diagrams: pools and lanes, events with all thirteen triggers, the five gateway types, tasks with their task types, collapsed sub-processes and call activities, boundary events, sequence flows with their default and conditional variants, message flows with their messages, associations in any direction, data objects and stores, text annotations and groups. The [BPMN element reference](./bpmnElements.md) lists every BPMN 2.0 element as supported, reachable through a workaround, or not written yet.
 
 It does not read or write BPMN XML, so a diagram cannot be opened in, or imported from, a BPMN modelling tool.
 

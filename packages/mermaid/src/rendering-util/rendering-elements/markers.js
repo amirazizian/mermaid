@@ -1065,6 +1065,60 @@ const hollowCircle = (elem, type, id) => {
   hollowCircleMarker(elem, base + 'End', cls, RING_FAR - HOLLOW_CIRCLE_GAP);
 };
 
+// A short stroke across the line near its start, at 60 degrees to it: the mark BPMN puts on a
+// default flow. The line runs on beneath it to the shape it leaves.
+const slash = (elem, type, id) => {
+  const make = (suffix, d) =>
+    elem
+      .append('marker')
+      .attr('id', id + '_' + type + '-slash' + suffix)
+      .attr('class', 'marker slash ' + type)
+      .attr('viewBox', '0 0 20 20')
+      .attr('refX', 0)
+      .attr('refY', 10)
+      .attr('markerUnits', 'userSpaceOnUse')
+      .attr('markerWidth', 20)
+      .attr('markerHeight', 20)
+      .attr('orient', 'auto')
+      .attr('overflow', 'visible')
+      .append('path')
+      .attr('d', d)
+      .attr('class', 'arrowMarkerPath')
+      .style('stroke-width', 1.5)
+      .style('stroke-linecap', 'round')
+      .style('stroke-dasharray', '1,0')
+      .style('fill', 'none');
+  make('Start', 'M 3 15 L 9 5');
+  make('End', 'M 17 15 L 11 5');
+};
+
+// A small hollow diamond whose near point touches the shape the line leaves: the mark BPMN
+// puts on a conditional flow out of an activity. It is filled with the background so the line
+// does not show through it.
+const smallDiamond = (elem, type, id) => {
+  const make = (suffix, refX) =>
+    elem
+      .append('marker')
+      .attr('id', id + '_' + type + '-smallDiamond' + suffix)
+      .attr('class', 'marker smallDiamond ' + type)
+      .attr('viewBox', '0 0 16 10')
+      .attr('refX', refX)
+      .attr('refY', 5)
+      .attr('markerUnits', 'userSpaceOnUse')
+      .attr('markerWidth', 16)
+      .attr('markerHeight', 10)
+      .attr('orient', 'auto')
+      .attr('overflow', 'visible')
+      .append('path')
+      .attr('d', 'M 1 5 L 8 1 L 15 5 L 8 9 Z')
+      .attr('class', 'arrowMarkerPath')
+      .style('stroke-width', 1.4)
+      .style('stroke-linejoin', 'round')
+      .style('stroke-dasharray', '1,0');
+  make('Start', 1);
+  make('End', 15);
+};
+
 // TODO rename the class diagram markers to something shape descriptive and semantic free
 const markers = {
   extension,
@@ -1092,5 +1146,7 @@ const markers = {
   requirement_contains_neo,
   openArrow,
   hollowCircle,
+  slash,
+  smallDiamond,
 };
 export default insertMarkers;
