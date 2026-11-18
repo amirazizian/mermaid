@@ -37,7 +37,7 @@ interface EndpointEdge {
   end?: string;
 }
 
-function endpointRectOf(node: any): RectBounds | undefined {
+export function endpointRectOf(node: any): RectBounds | undefined {
   const drawn = node?.metadata?.drawnExtent;
   if (
     drawn &&
@@ -542,7 +542,7 @@ export function anyNodeDeclaresEndpointProfile(
   return [...nodes].some((node) => declaresEndpointProfile(node));
 }
 
-function meetsAtVertices(node: any): boolean {
+export function meetsAtVertices(node: any): boolean {
   return endpointProfileOf(node) === 'vertex' && Boolean(node?.metadata?.drawnExtent);
 }
 
@@ -552,7 +552,7 @@ function wantsOneLinePerCorner(node: any): boolean {
   return isFlagged(node, 'oneLinePerVertex');
 }
 
-function vertexOf(node: any, side: VertexSide): Point | undefined {
+export function vertexOf(node: any, side: VertexSide): Point | undefined {
   const drawn = node?.metadata?.drawnExtent;
   const cx = node?.x;
   const cy = node?.y;
@@ -614,7 +614,7 @@ function joinRouteAtVertex(vertex: Point, side: VertexSide, inward: Point[]): Po
   return dropAxisBacktracks([vertex, ...(needsCorner ? [corner] : []), ...tail]);
 }
 
-interface RoutedEdge {
+export interface RoutedEdge {
   id?: string;
   points?: Point[];
   start?: string;
@@ -626,7 +626,7 @@ interface RoutedEdge {
  * The shapes and texts a way from a vertex should keep off: each node's drawn shape, the band
  * under a shape that writes its caption below it, and the edge labels.
  */
-function obstaclesOf(nodeByIdMap: Map<string, any>): Obstacle[] {
+export function obstaclesOf(nodeByIdMap: Map<string, any>): Obstacle[] {
   const obstacles: Obstacle[] = [];
   for (const node of nodeByIdMap.values()) {
     if (!node || node.isGroup || typeof node.x !== 'number' || typeof node.y !== 'number') {
@@ -651,7 +651,28 @@ function obstaclesOf(nodeByIdMap: Map<string, any>): Obstacle[] {
   return obstacles;
 }
 
-const labelNodeIdOf = (edge: RoutedEdge) => `edge-label-${edge.start}-${edge.end}-${edge.id}`;
+/**
+ * How far out of a vertex a way may run before it turns: a stub, or past the room the node keeps
+ * round its shape on that side (where its caption is written) by a stub.
+ */
+function levelsPast(node: any, vertex: Point, side: VertexSide): number[] {
+  const box = rectOfNodeBounds(node);
+  if (!box) {
+    return [VERTEX_STUB];
+  }
+  const room =
+    side === 'top'
+      ? vertex.y - box.top
+      : side === 'bottom'
+        ? box.bottom - vertex.y
+        : side === 'left'
+          ? vertex.x - box.left
+          : box.right - vertex.x;
+  return room > 1 ? [VERTEX_STUB, room + VERTEX_STUB] : [VERTEX_STUB];
+}
+
+export const labelNodeIdOf = (edge: RoutedEdge) =>
+  `edge-label-${edge.start}-${edge.end}-${edge.id}`;
 
 /**
  * Ends each edge on a pointed node at one of the node's drawn vertices: the one from which the
@@ -701,8 +722,16 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
     const context: VertexContext = {
       vertexAt: (side) => vertexOf(node, side),
       ownShape,
+      ownId: String(id),
       obstacles,
       exempt: (edge) => new Set([String(id), labelNodeIdOf(edge as RoutedEdge)]),
+      farRect: (edge) => {
+        const e = edge as RoutedEdge;
+        const far = nodeByIdMap.get(String(e.start === id ? e.end : e.start));
+        return far && !far.isGroup && endpointProfileOf(far) === 'flat'
+          ? endpointRectOf(far)
+          : undefined;
+      },
       farEnd: (edge) => {
         const e = edge as RoutedEdge;
         return e.start === id ? e.end : e.start;
@@ -733,7 +762,8 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
           side,
           inward,
           farRect,
-          joinRouteAtVertex(vertex, side, inward)
+          joinRouteAtVertex(vertex, side, inward),
+          levelsPast(node, vertex, side)
         );
         for (const way of ways) {
           const cost = costOfWay(way, context, contact.edge, others) + context.sideCost(side);

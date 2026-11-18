@@ -18,18 +18,18 @@ export const VERTEX_SIDES: readonly VertexSide[] = ['top', 'bottom', 'left', 'ri
 export const VERTEX_STUB = 12;
 
 /** What a turn costs, in pixels of length. */
-const BEND_COST = 30;
+export const BEND_COST = 30;
 /** What crossing a shape costs: a way that does is used only when every way does. */
 const SHAPE_COST = 100_000;
 /** What crossing a text (a caption or another edge's label) costs. */
-const TEXT_COST = 250;
+export const TEXT_COST = 250;
 /** What crossing another edge costs. */
-const CROSSING_COST = 90;
+export const CROSSING_COST = 90;
 /** What running along another edge costs, per pixel shared. */
-const SHARED_TRACK_COST = 6;
-/** What running along another shape's side, closer than HUG_GAP, costs. */
+export const SHARED_TRACK_COST = 6;
+/** What running along another shape's side, closer than HUG_GAP, costs, and per pixel. */
 const HUG_COST = 120;
-const HUG_GAP = 6;
+const HUG_GAP = 10;
 /** What running along the node's own shape, closer than OWN_HUG_GAP, costs. */
 const OWN_HUG_COST = 40;
 const OWN_HUG_GAP = 16;
@@ -40,6 +40,9 @@ const OWN_HUG_GAP = 16;
 export const CAPTION_VERTEX_COST = 60;
 
 const EPS = 1e-6;
+/** A way that meets a flat far end closer than this to a corner of it costs NEAR_CORNER_COST. */
+const NEAR_CORNER = 16;
+const NEAR_CORNER_COST = 40;
 
 export interface Obstacle {
   id: string;
@@ -54,6 +57,8 @@ export interface VertexContext {
   vertexAt: (side: VertexSide) => Point | undefined;
   /** The node's own drawn shape, which a way must not run back through. */
   ownShape: RectBounds;
+  /** The node's id, whose caption room a way may leave through but not run on in. */
+  ownId: string;
   obstacles: Obstacle[];
   /** Ids of obstacles a given edge may cross: its own node and its own label. */
   exempt: (edge: unknown) => Set<string>;
@@ -112,7 +117,7 @@ function dropBacktracks(points: Point[]): Point[] {
   return out;
 }
 
-const tidy = (points: Point[]): Point[] =>
+export const tidy = (points: Point[]): Point[] =>
   simplifyPolyline(dropBacktracks(dedupeConsecutivePoints(points, 1e-3)));
 
 const isOrthogonal = (points: Point[]) =>
@@ -121,14 +126,14 @@ const isOrthogonal = (points: Point[]) =>
       i === 0 || Math.abs(p.x - points[i - 1].x) < EPS || Math.abs(p.y - points[i - 1].y) < EPS
   );
 
-const lengthOf = (points: Point[]) =>
+export const lengthOf = (points: Point[]) =>
   points.reduce(
     (sum, p, i) =>
       i === 0 ? sum : sum + Math.abs(p.x - points[i - 1].x) + Math.abs(p.y - points[i - 1].y),
     0
   );
 
-function bendsOf(points: Point[]): number {
+export function bendsOf(points: Point[]): number {
   let bends = 0;
   for (let i = 1; i < points.length - 1; i++) {
     const a = points[i - 1];
@@ -144,7 +149,7 @@ function bendsOf(points: Point[]): number {
 }
 
 /** Whether segment a-b runs through the inside of rect (touching its border does not count). */
-function segmentEntersRect(a: Point, b: Point, rect: RectBounds, inset = 0.5): boolean {
+export function segmentEntersRect(a: Point, b: Point, rect: RectBounds, inset = 0.5): boolean {
   const left = rect.left + inset;
   const right = rect.right - inset;
   const top = rect.top + inset;
@@ -160,23 +165,26 @@ function segmentEntersRect(a: Point, b: Point, rect: RectBounds, inset = 0.5): b
   );
 }
 
-/** Whether segment a-b runs along a side of rect, outside it but closer than `gap`. */
-function segmentHugsRect(a: Point, b: Point, rect: RectBounds, gap: number): boolean {
+/** How far inside a side a run along it still counts as on it. */
+const ON_BORDER = 0.5;
+
+/** Whether segment a-b runs along a side of rect, on it or outside it closer than `gap`. */
+export function segmentHugsRect(a: Point, b: Point, rect: RectBounds, gap: number): boolean {
   const horizontal = Math.abs(a.y - b.y) < EPS;
   const vertical = Math.abs(a.x - b.x) < EPS;
   const minLength = 12;
   if (horizontal) {
     const overlap =
       Math.min(Math.max(a.x, b.x), rect.right) - Math.max(Math.min(a.x, b.x), rect.left);
-    const nearTop = a.y < rect.top && rect.top - a.y < gap;
-    const nearBottom = a.y > rect.bottom && a.y - rect.bottom < gap;
+    const nearTop = a.y <= rect.top + ON_BORDER && rect.top - a.y < gap;
+    const nearBottom = a.y >= rect.bottom - ON_BORDER && a.y - rect.bottom < gap;
     return overlap > minLength && (nearTop || nearBottom);
   }
   if (vertical) {
     const overlap =
       Math.min(Math.max(a.y, b.y), rect.bottom) - Math.max(Math.min(a.y, b.y), rect.top);
-    const nearLeft = a.x < rect.left && rect.left - a.x < gap;
-    const nearRight = a.x > rect.right && a.x - rect.right < gap;
+    const nearLeft = a.x <= rect.left + ON_BORDER && rect.left - a.x < gap;
+    const nearRight = a.x >= rect.right - ON_BORDER && a.x - rect.right < gap;
     return overlap > minLength && (nearLeft || nearRight);
   }
   return false;
@@ -259,6 +267,13 @@ export function costOfWay(
       cost += OWN_HUG_COST;
     }
     for (const obstacle of context.obstacles) {
+      if (obstacle.id === context.ownId) {
+        // The way leaves through the node's own caption room, but does not run on in it.
+        if (i > 0 && obstacle.text && segmentEntersRect(a, b, obstacle.text)) {
+          cost += TEXT_COST;
+        }
+        continue;
+      }
       if (exempt.has(obstacle.id)) {
         continue;
       }
@@ -271,7 +286,7 @@ export function costOfWay(
       ) {
         cost += TEXT_COST;
       } else if (obstacle.shape && segmentHugsRect(a, b, obstacle.shape, HUG_GAP)) {
-        cost += HUG_COST;
+        cost += HUG_COST + lengthOf([a, b]);
       } else if (
         obstacle.id === farEnd &&
         obstacle.shape &&
@@ -285,7 +300,22 @@ export function costOfWay(
   for (const other of others) {
     cost += conflictCost(points, other);
   }
+  const farRect = context.farRect?.(edge);
+  if (farRect && nearACorner(points[points.length - 1], farRect)) {
+    cost += NEAR_CORNER_COST;
+  }
   return cost;
+}
+
+/** Whether `p`, on a side of `rect`, is closer than NEAR_CORNER to one of its corners. */
+function nearACorner(p: Point, rect: RectBounds): boolean {
+  const onSide =
+    Math.abs(p.x - rect.left) < 0.5 || Math.abs(p.x - rect.right) < 0.5
+      ? [p.y - rect.top, rect.bottom - p.y]
+      : Math.abs(p.y - rect.top) < 0.5 || Math.abs(p.y - rect.bottom) < 0.5
+        ? [p.x - rect.left, rect.right - p.x]
+        : undefined;
+  return onSide !== undefined && Math.min(...onSide) < NEAR_CORNER - 0.5;
 }
 
 /**
@@ -298,7 +328,8 @@ export function waysFromVertex(
   side: VertexSide,
   route: Point[],
   farRect?: RectBounds,
-  kept?: Point[]
+  kept?: Point[],
+  levels: number[] = []
 ): Point[][] {
   const n = normalOf(side);
   const vertical = n.x === 0;
@@ -327,6 +358,15 @@ export function waysFromVertex(
     const across = vertical ? { x: target.x, y: mid.y } : { x: mid.x, y: target.y };
     ways.push([vertex, mid, across, target, ...rest]);
   }
+  // Out to a given level (past a caption, say), across, and back or on to a point of the route.
+  for (const level of levels) {
+    const out = { x: vertex.x + n.x * level, y: vertex.y + n.y * level };
+    for (let k = 1; k < route.length; k++) {
+      const target = route[k];
+      const across = vertical ? { x: target.x, y: out.y } : { x: out.x, y: target.y };
+      ways.push([vertex, out, across, target, ...route.slice(k + 1)]);
+    }
+  }
 
   // Ways that end on another face of a flat far end: straight on into it where the vertex lines
   // up with it, or one turn into the face nearest the vertex.
@@ -354,7 +394,19 @@ export function waysFromVertex(
     // One turn into the face: at its middle, or a quarter along either way, which keeps clear
     // of another edge at the middle.
     const span = vertical ? farRect.bottom - farRect.top : farRect.right - farRect.left;
-    for (const offset of [0, -span / 4, span / 4]) {
+    // ...and as near the vertex as the face allows, for a short L.
+    const [faceLo, faceHi] = vertical
+      ? [farRect.top, farRect.bottom]
+      : [farRect.left, farRect.right];
+    const near =
+      Math.min(
+        faceHi - NEAR_CORNER,
+        Math.max(
+          faceLo + NEAR_CORNER,
+          (vertical ? vertex.y : vertex.x) + (vertical ? n.y : n.x) * 2 * VERTEX_STUB
+        )
+      ) - (vertical ? centre.y : centre.x);
+    for (const offset of [0, -span / 4, span / 4, near]) {
       const at = vertical
         ? { x: centre.x, y: centre.y + offset }
         : { x: centre.x + offset, y: centre.y };
@@ -366,6 +418,30 @@ export function waysFromVertex(
         ? { x: cross < lo ? farRect.left : farRect.right, y: at.y }
         : { x: at.x, y: cross < lo ? farRect.top : farRect.bottom };
       freeEnds.push([vertex, corner, face]);
+    }
+    // Out to a level (past a caption, say), then round into the middle of any face.
+    const faces: { port: Point; out: Point }[] = [
+      { port: { x: centre.x, y: farRect.top }, out: { x: 0, y: -1 } },
+      { port: { x: centre.x, y: farRect.bottom }, out: { x: 0, y: 1 } },
+      { port: { x: farRect.left, y: centre.y }, out: { x: -1, y: 0 } },
+      { port: { x: farRect.right, y: centre.y }, out: { x: 1, y: 0 } },
+    ];
+    for (const level of levels) {
+      const out = { x: vertex.x + n.x * level, y: vertex.y + n.y * level };
+      for (const { port, out: m } of faces) {
+        const faceAlongN = (m.x === 0) === vertical;
+        if (faceAlongN) {
+          // Across to the port's line, then straight into the face.
+          const across = vertical ? { x: port.x, y: out.y } : { x: out.x, y: port.y };
+          freeEnds.push([vertex, out, across, port]);
+        } else {
+          // Across to a stub off the face, along to the port's line, and into the face.
+          const stub = { x: port.x + m.x * VERTEX_STUB * 2, y: port.y + m.y * VERTEX_STUB * 2 };
+          const across = vertical ? { x: stub.x, y: out.y } : { x: out.x, y: stub.y };
+          const turn = vertical ? { x: stub.x, y: port.y } : { x: port.x, y: stub.y };
+          freeEnds.push([vertex, out, across, turn, port]);
+        }
+      }
     }
   }
 
@@ -410,7 +486,26 @@ export function waysFromVertex(
     const prev = way[way.length - 2];
     return Math.abs(end.x - prev.x) + Math.abs(end.y - prev.y) >= VERTEX_STUB - EPS;
   };
-  return [...valid, ...freeEnds.map(tidy).filter((way) => way.length >= 2 && arrivesSquarely(way))];
+  // A way into a face leaves the vertex outward and meets the face from outside it.
+  const soundFreeEnd = (way: Point[]) => {
+    if (way.length < 2 || !isOrthogonal(way) || !arrivesSquarely(way)) {
+      return false;
+    }
+    const first = sub(way[1], way[0]);
+    if (along(first, n) < VERTEX_STUB - EPS || Math.abs(vertical ? first.x : first.y) > EPS) {
+      return false;
+    }
+    const end = way[way.length - 1];
+    const d = sub(end, way[way.length - 2]);
+    return (
+      !farRect ||
+      (Math.abs(end.y - farRect.top) < EPS && d.y > 0) ||
+      (Math.abs(end.y - farRect.bottom) < EPS && d.y < 0) ||
+      (Math.abs(end.x - farRect.left) < EPS && d.x > 0) ||
+      (Math.abs(end.x - farRect.right) < EPS && d.x < 0)
+    );
+  };
+  return [...valid, ...freeEnds.map(tidy).filter(soundFreeEnd)];
 }
 
 /** Every assignment of sides to `count` contacts, distinct sides only with `distinct`. */

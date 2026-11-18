@@ -129,3 +129,56 @@ describe('a vertex for each flow of a gateway', () => {
     expect(flow.points.at(-1)).toEqual({ x: 18, y: 582 });
   });
 });
+
+/** An event on the bottom border of a host shape, with room for its caption under it. */
+const boundaryEvent = (x: number, y: number) => ({
+  id: 'b',
+  x,
+  y,
+  width: 46,
+  height: 96,
+  metadata: { endpointProfile: 'vertex', drawnExtent: { width: 36, height: 36 } },
+});
+
+describe('a vertex way past the shapes and texts round it', () => {
+  it('does not run along the border of the shape an event sits on', () => {
+    // The event sits on the bottom border of a big frame; the target lies to the right at the
+    // border's height. Straight on would run along the border for the frame's width.
+    const frame = flat('f', 0, 0, 400, 200);
+    const target = flat('t', 500, 100, 120, 80);
+    const flow = edge('m', 'b', 't', { x: 118, y: 100 }, { x: 440, y: 100 });
+    meetDiamondsAtTheirVertex([flow], nodes(boundaryEvent(100, 100), frame, target));
+    for (let i = 0; i < flow.points.length - 1; i++) {
+      const [a, b] = [flow.points[i], flow.points[i + 1]];
+      const alongBorder = Math.abs(a.y - 100) < 10 && Math.abs(b.y - 100) < 10;
+      const overFrame = Math.min(a.x, b.x) < 200;
+      expect(alongBorder && overFrame).toBe(false);
+    }
+  });
+
+  it('turns past its own caption, not through it', () => {
+    // The event sits on the bottom border of a task; its caption is written under it. The flow
+    // leaves downward and turns to the right, to an event level with the task.
+    const task = flat('t', 36, 0, 121, 80);
+    const target = {
+      id: 'e',
+      x: 164,
+      y: 0,
+      width: 36,
+      height: 96,
+      metadata: { endpointProfile: 'vertex', drawnExtent: { width: 36, height: 36 } },
+    };
+    const flow = edge('m', 'b', 'e', { x: 54, y: 48 }, { x: 164, y: 48 }, { x: 164, y: 18 });
+    meetDiamondsAtTheirVertex([flow], nodes(boundaryEvent(36, 40), task, target));
+    const caption = { left: 13, right: 59, top: 58, bottom: 88 };
+    for (let i = 1; i < flow.points.length - 1; i++) {
+      const [a, b] = [flow.points[i], flow.points[i + 1]];
+      const inside =
+        Math.max(a.x, b.x) > caption.left &&
+        Math.min(a.x, b.x) < caption.right &&
+        Math.max(a.y, b.y) > caption.top &&
+        Math.min(a.y, b.y) < caption.bottom;
+      expect(inside).toBe(false);
+    }
+  });
+});
