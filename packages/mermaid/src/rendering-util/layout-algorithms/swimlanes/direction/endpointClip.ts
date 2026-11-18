@@ -507,6 +507,9 @@ function dropAxisBacktracks(points: Point[]): Point[] {
 }
 
 const VERTEX_SIDES = ['top', 'bottom', 'left', 'right'] as const;
+
+/** How far a line runs out of a vertex that faces away from its route before it turns. */
+const VERTEX_STUB = 12;
 type VertexSide = (typeof VERTEX_SIDES)[number];
 
 /**
@@ -653,11 +656,23 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
       );
       const tail = cleared >= 0 ? inward.slice(cleared) : inward;
       const first = tail[0] ?? vertex;
-      const corner = alongY ? { x: vertex.x, y: first.y } : { x: first.x, y: vertex.y };
-      const needsCorner =
-        Math.abs(corner.x - first.x) > 1e-6 || Math.abs(corner.y - first.y) > 1e-6;
-
-      const ordered = [vertex, ...(needsCorner ? [corner] : []), ...tail];
+      let ordered: Point[];
+      if (cleared < 0 && tail.length) {
+        // Nothing of the route lies beyond this vertex: the vertex faces away from where the
+        // line goes, because the vertices facing it are taken. Turning at the vertex's own
+        // height would run the line back through the shape, so it first leaves the vertex by
+        // a stub and turns there, outside the shape.
+        const stub = alongY
+          ? { x: vertex.x, y: vertex.y + away * VERTEX_STUB }
+          : { x: vertex.x + away * VERTEX_STUB, y: vertex.y };
+        const turn = alongY ? { x: first.x, y: stub.y } : { x: stub.x, y: first.y };
+        ordered = [vertex, stub, turn, ...tail];
+      } else {
+        const corner = alongY ? { x: vertex.x, y: first.y } : { x: first.x, y: vertex.y };
+        const needsCorner =
+          Math.abs(corner.x - first.x) > 1e-6 || Math.abs(corner.y - first.y) > 1e-6;
+        ordered = [vertex, ...(needsCorner ? [corner] : []), ...tail];
+      }
       const joined = contact.atStart ? ordered : [...ordered].reverse();
       contact.edge.points = dropAxisBacktracks(joined);
     }

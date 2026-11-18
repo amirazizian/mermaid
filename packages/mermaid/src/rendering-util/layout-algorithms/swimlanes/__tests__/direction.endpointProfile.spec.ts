@@ -223,3 +223,31 @@ describe('endpointProfile crop', () => {
     expect(points?.at(-1)).toEqual({ x: UPPER.x, y: UPPER.y + DRAWN.height / 2 });
   });
 });
+
+describe('endpointProfile vertex facing away from the route', () => {
+  it('leaves by a stub outside the shape instead of turning back through it', () => {
+    // The right vertex is taken by the first edge, so the second leaves by the top or the
+    // bottom one, although its route runs on to the right near the centre's height.
+    const first = { id: 'e1', start: 'n', end: 'a', points: [CENTRE, { x: 160, y: 100 }] };
+    const second = {
+      id: 'e2',
+      start: 'n',
+      end: 'b',
+      points: [CENTRE, { x: 140, y: 104 }, { x: 160, y: 104 }],
+    };
+    meetDiamondsAtTheirVertex(
+      [first, second],
+      new Map([['n', node({ endpointProfile: 'vertex', oneLinePerVertex: true })]])
+    );
+    const [vertex, ...rest] = second.points;
+    expect(vertex.x).toBe(100);
+    expect(Math.abs(vertex.y - 100)).toBe(10);
+    // Every later point is outside the drawn diamond's box, above it or right of it.
+    for (const point of rest.slice(0, -1)) {
+      const inside = Math.abs(point.x - 100) < 10 && Math.abs(point.y - 100) < 10;
+      expect(inside).toBe(false);
+    }
+    // The stub runs on away from the centre, past the vertex.
+    expect(Math.abs(rest[0].y - 100)).toBeGreaterThan(10);
+  });
+});
