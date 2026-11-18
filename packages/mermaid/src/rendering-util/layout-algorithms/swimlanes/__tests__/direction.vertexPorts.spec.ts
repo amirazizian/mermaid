@@ -182,3 +182,34 @@ describe('a vertex way past the shapes and texts round it', () => {
     }
   });
 });
+
+describe('a vertex way that turns back', () => {
+  it('comes in by a vertex it shares rather than run round the node to the far one', () => {
+    // An event with flows in from above, below and the left. One more comes from the lower
+    // left: in by the left vertex it runs along the flow already there; in by the right one it
+    // runs round the event. Running round is worse.
+    const event = {
+      id: 'e',
+      x: 0,
+      y: 0,
+      width: 76,
+      height: 96,
+      metadata: { endpointProfile: 'vertex', drawnExtent: { width: 36, height: 36 } },
+    };
+    const sources = ['a', 'b', 'c', 'd'].map((id, k) => flat(id, -400, k * 300 - 400, 100, 60));
+    const above = edge('A', 'a', 'e', { x: -200, y: -100 }, { x: 0, y: -100 }, { x: 0, y: -18 });
+    const below = edge('B', 'b', 'e', { x: 0, y: 200 }, { x: 0, y: 18 });
+    const left = edge('C', 'c', 'e', { x: -200, y: 0 }, { x: -18, y: 0 });
+    const lowerLeft = edge(
+      'D',
+      'd',
+      'e',
+      { x: -200, y: 60 },
+      { x: -100, y: 60 },
+      { x: -100, y: 0 },
+      { x: -18, y: 0 }
+    );
+    meetDiamondsAtTheirVertex([above, below, left, lowerLeft], nodes(event, ...sources));
+    expect(lowerLeft.points.at(-1)).not.toEqual({ x: 18, y: 0 });
+  });
+});

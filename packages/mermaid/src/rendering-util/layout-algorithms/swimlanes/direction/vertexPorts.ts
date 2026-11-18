@@ -43,6 +43,10 @@ const EPS = 1e-6;
 /** A way that meets a flat far end closer than this to a corner of it costs NEAR_CORNER_COST. */
 const NEAR_CORNER = 16;
 const NEAR_CORNER_COST = 40;
+/** What a way costs that leaves its vertex away from where it ends, and turns back round. */
+const TURNS_BACK_COST = 400;
+/** The cosine of the angle (120 degrees) past which a way turns back round its node. */
+const TURNS_BACK = -0.5;
 
 export interface Obstacle {
   id: string;
@@ -303,6 +307,20 @@ export function costOfWay(
   const farRect = context.farRect?.(edge);
   if (farRect && nearACorner(points[points.length - 1], farRect)) {
     cost += NEAR_CORNER_COST;
+  }
+  // A way that leaves the vertex facing away from where it ends, more than TURNS_BACK from
+  // it as seen from the node's centre, turns back round the node.
+  if (points.length >= 2) {
+    const centre = {
+      x: (context.ownShape.left + context.ownShape.right) / 2,
+      y: (context.ownShape.top + context.ownShape.bottom) / 2,
+    };
+    const out = sub(points[0], centre);
+    const toFar = sub(points[points.length - 1], centre);
+    const lengths = Math.hypot(out.x, out.y) * Math.hypot(toFar.x, toFar.y);
+    if (lengths > 0 && (out.x * toFar.x + out.y * toFar.y) / lengths < TURNS_BACK) {
+      cost += TURNS_BACK_COST;
+    }
   }
   return cost;
 }
