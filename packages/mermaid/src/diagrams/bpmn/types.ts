@@ -58,8 +58,10 @@ export const ELEMENT_ATTRIBUTES = {
   start: ['interrupting'],
   boundary: ['interrupting'],
   xor: ['marker'],
+  'event-gateway': ['instantiate'],
   data: ['state'],
   pool: ['multiple'],
+  group: ['members'],
 } as const satisfies Record<string, readonly string[]>;
 
 export const TRIGGERS_BY_POSITION = {

@@ -241,6 +241,18 @@ const getStyles = (options: BpmnStyleOptions) => {
     stroke: none;
   }
 
+  .bpmn-spanning-group rect {
+    fill: none;
+    stroke: ${laneStroke};
+    stroke-width: 1.4px;
+    stroke-dasharray: 10 4 2 4;
+  }
+  .bpmn-spanning-group text {
+    fill: ${labelColor};
+    font-family: ${options.fontFamily};
+    font-size: 12px;
+  }
+
   .swimlane.cluster rect,
   .pool.cluster rect {
     fill: ${laneFill};

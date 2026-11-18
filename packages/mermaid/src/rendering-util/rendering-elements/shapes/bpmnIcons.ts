@@ -89,6 +89,12 @@ export const bpmnIcons: IconifyJSON = {
     'event-based': {
       body: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="12" cy="12" r="6.8" fill="none" stroke="currentColor" stroke-width="1.3"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" d="m12 7.4 4 2.9-1.5 4.7h-5L8 10.3z"/>',
     },
+    'event-based-instantiating': {
+      body: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.3"/><path fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" d="m12 7.4 4 2.9-1.5 4.7h-5L8 10.3z"/>',
+    },
+    'event-based-parallel': {
+      body: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.3"/><path fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" d="M10.6 7h2.8v3.6H17v2.8h-3.6V17h-2.8v-3.6H7v-2.8h3.6z"/>',
+    },
     complex: {
       body: '<path stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/>',
     },

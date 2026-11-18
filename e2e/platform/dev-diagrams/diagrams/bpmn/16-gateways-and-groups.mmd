@@ -1,0 +1,20 @@
+bpmn-beta LR
+title Instantiating gateways and a group across pools
+  pool shop "Shop"
+    lane sales "Sales"
+      event-gateway g1 "Wait for order" @{ instantiate: true }
+      intermediate message m1 "Web order"
+      intermediate message m2 "Phone order"
+      task t1 "Record order"
+    lane wh "Warehouse"
+      event-gateway g2 "Wait for both" @{ instantiate: parallel }
+      task t2 "Pick"
+  pool carrier "Carrier"
+    lane "Dispatch"
+      task t3 "Collect"
+  group ship "Shipping" @{ members: [t2, t3] }
+  g1 --> m1 --> t1
+  g1 --> m2 --> t1
+  t1 --> t2
+  g2 --> t2
+  t2 -.-> t3

@@ -120,6 +120,15 @@ const drawnAs = (node: ParsedNode): Drawn => {
         ...(qualifier ? { icon: `bpmn:${qualifier}` } : {}),
       };
     case 'gateway':
+      if (node.instantiate) {
+        return {
+          shape: 'bpmn-gateway',
+          icon:
+            node.instantiate === 'parallel'
+              ? 'bpmn:event-based-parallel'
+              : 'bpmn:event-based-instantiating',
+        };
+      }
       return node.unmarked
         ? { shape: 'bpmn-gateway' }
         : { shape: 'bpmn-gateway', icon: GATEWAY_GLYPHS[node.keyword] ?? 'bpmn:exclusive' };
@@ -277,6 +286,13 @@ export class BpmnDb {
     return undefined;
   }
 
+  /** The groups drawn around members anywhere in the diagram, once it is laid out. */
+  public spanningGroups(): { id: string; label: string; members: string[] }[] {
+    return this.parsed.nodes
+      .filter((node) => node.members)
+      .map((node) => ({ id: node.id, label: node.label, members: node.members! }));
+  }
+
   /** The expanded sub-processes, those inside others first, so each is laid out before its own. */
   public expandedSubprocesses(): string[] {
     const depth = (id: string): number => {
@@ -338,7 +354,8 @@ export class BpmnDb {
     let laneIndex = 0;
     const artifactHosts = this.artifactHosts(scope);
     for (const parsed of this.parsed.nodes) {
-      if (this.scopeOf(parsed.id) !== scope) {
+      // A group with members is not laid out; it is drawn around them afterwards.
+      if (this.scopeOf(parsed.id) !== scope || parsed.members) {
         continue;
       }
       const artifactHost = artifactHosts.get(parsed.id);

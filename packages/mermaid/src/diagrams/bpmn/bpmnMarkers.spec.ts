@@ -652,7 +652,7 @@ describe('element attributes', () => {
 
   it('names an event-gateway once', () => {
     expect(() => parseBpmn(inLane('event-gateway g @{ marker: none }'))).toThrow(
-      'an event-gateway takes no attributes.'
+      '"marker" is not an attribute of an event-gateway, which takes instantiate.'
     );
   });
 

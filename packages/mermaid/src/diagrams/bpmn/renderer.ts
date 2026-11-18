@@ -8,6 +8,7 @@ import type { LayoutData } from '../../rendering-util/types.js';
 import utils from '../../utils.js';
 import { avoidCaptionCrossings } from './captionPlacement.js';
 import { decorateFlows } from './flowDecorations.js';
+import { drawSpanningGroups } from './spanningGroups.js';
 
 export const getClasses = function (
   _text: string,
@@ -163,6 +164,18 @@ export const draw = async function (_text: string, id: string, _version: string,
   placeSubprocessContents(svg, contents);
   avoidCaptionCrossings(svg.node());
   decorateFlows(svg.node());
+  drawSpanningGroups(
+    svg.node(),
+    (diag.db.spanningGroups() as { id: string; label: string; members: string[] }[]).map(
+      (group) => ({
+        ...group,
+        memberDomIds: group.members.map((member) => {
+          const scope = diag.db.scopeOf(member) as string | undefined;
+          return `${scope ? `${id}-${scope}` : id}-${member}`;
+        }),
+      })
+    )
+  );
 
   const padding = conf?.diagramPadding ?? 12;
   const drawnTop = (svg.node() as SVGGraphicsElement | null)?.getBBox().y ?? 0;

@@ -182,10 +182,20 @@ export interface ParsedNode {
   state?: string;
   /** A pool that stands for several participants of one kind. */
   multiple?: boolean;
+  /**
+   * The elements a group is drawn around when it spans lanes or pools, which indentation
+   * cannot say: `members: [a, b]`.
+   */
+  members?: string[];
   /** A sub-process that is an event sub-process or a transaction: `kind: event | transaction`. */
   subprocessKind?: SubprocessKind;
   /** A sub-process drawn open, with the elements indented under it inside it. */
   expanded?: boolean;
+  /**
+   * An event-based gateway that starts a process when one of its events occurs (`true`), or
+   * once all of them have (`parallel`).
+   */
+  instantiate?: 'exclusive' | 'parallel';
   /** A start or boundary event written `interrupting: false`, drawn with a dashed ring. */
   nonInterrupting?: boolean;
 }
@@ -400,6 +410,7 @@ class BpmnVisitor extends BpmnBaseVisitor {
     this.assignGeneratedIds();
     this.assignParents();
     this.checkSubprocesses();
+    this.checkSpanningGroups();
     const declared = this.leftOut?.size
       ? new Set([...this.declared, ...this.leftOut])
       : this.declared;
@@ -730,6 +741,37 @@ class BpmnVisitor extends BpmnBaseVisitor {
           );
         });
       }
+    }
+  }
+
+  /**
+   * A group written with `members` is drawn around elements anywhere in the diagram, so it
+   * names declared elements, is written outside every pool and lane, and holds nothing
+   * indented under it.
+   */
+  private checkSpanningGroups() {
+    for (const group of this.nodes.filter((node) => node.members)) {
+      const at = written.get(group);
+      this.attempt(at, () => {
+        if (group.parentId) {
+          throw new Error(
+            `BPMN error${atText(at)}: a group with members is drawn around elements in any lane or pool, so it is written at the top level, not under "${group.parentId}".`
+          );
+        }
+        if (this.nodes.some((node) => node.parentId === group.id)) {
+          throw new Error(
+            `BPMN error${atText(at)}: the group "${group.id}" names its members, so nothing is indented under it.`
+          );
+        }
+        const missing = group.members!.find(
+          (member) => member === group.id || !this.declared.has(member)
+        );
+        if (missing) {
+          throw new Error(
+            `BPMN error${atText(at)}: the group "${group.id}" names "${missing}" as a member, which is not ${missing === group.id ? 'another' : 'a declared'} element.`
+          );
+        }
+      });
     }
   }
 
@@ -1085,6 +1127,8 @@ const attributeRowOf = (node: ParsedNode): readonly string[] | undefined => {
     node.kind === 'activity' ||
     node.kind === 'pool' ||
     node.keyword === 'xor' ||
+    node.keyword === 'event-gateway' ||
+    node.keyword === 'group' ||
     node.keyword === 'start' ||
     node.keyword === 'boundary'
   ) {
@@ -1167,6 +1211,25 @@ function applyAttributes(node: ParsedNode): void {
           node.unmarked = true;
         } else {
           throw wrongValue('none');
+        }
+        break;
+      case 'members':
+        if (
+          !Array.isArray(value) ||
+          value.length === 0 ||
+          !value.every((member) => typeof member === 'string' && member.trim())
+        ) {
+          throw wrongValue('a list of element ids');
+        }
+        node.members = value.map((member: string) => member.trim());
+        break;
+      case 'instantiate':
+        if (value === true) {
+          node.instantiate = 'exclusive';
+        } else if (value === 'parallel') {
+          node.instantiate = 'parallel';
+        } else if (value !== false) {
+          throw wrongValue('true, false or parallel');
         }
         break;
       case 'kind':
