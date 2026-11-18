@@ -109,4 +109,23 @@ describe('a vertex for each flow of a gateway', () => {
       { x: 0, y: 200 },
     ]);
   });
+
+  it("keeps clear of the far end's side, as of its own node's", () => {
+    // From the left face of a task above and to the right, into an event below it. Running down
+    // close beside the task's left face is shorter than one turn out of its bottom face, but
+    // hugs the task.
+    const event = {
+      id: 'e',
+      x: 0,
+      y: 582,
+      width: 76,
+      height: 96,
+      metadata: { endpointProfile: 'vertex', drawnExtent: { width: 36, height: 36 } },
+    };
+    const task = flat('t', 83, 454, 136, 80);
+    const flow = edge('f', 't', 'e', { x: 15, y: 454 }, { x: 6, y: 454 }, { x: 6, y: 564 });
+    meetDiamondsAtTheirVertex([flow], nodes(event, task));
+    expect(flow.points[0].y).toBe(494);
+    expect(flow.points.at(-1)).toEqual({ x: 18, y: 582 });
+  });
 });

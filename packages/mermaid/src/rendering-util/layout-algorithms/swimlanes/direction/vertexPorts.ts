@@ -57,8 +57,11 @@ export interface VertexContext {
   obstacles: Obstacle[];
   /** Ids of obstacles a given edge may cross: its own node and its own label. */
   exempt: (edge: unknown) => Set<string>;
-  /** Ids of obstacles whose text a given edge may cross: its far end's caption. */
-  textExempt: (edge: unknown) => Set<string>;
+  /**
+   * The id of a given edge's far end, whose caption the edge may cross and whose sides it should
+   * keep as clear of as its own node's.
+   */
+  farEnd: (edge: unknown) => string | undefined;
   /** Routes of the other edges, to count crossings and shared track against. */
   otherRoutes: (edge: unknown) => Point[][];
   /** Extra cost of using a side, such as a caption below. */
@@ -246,7 +249,7 @@ export function costOfWay(
 ): number {
   let cost = lengthOf(points) + BEND_COST * bendsOf(points);
   const exempt = context.exempt(edge);
-  const textExempt = context.textExempt(edge);
+  const farEnd = context.farEnd(edge);
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
@@ -263,12 +266,19 @@ export function costOfWay(
         cost += SHAPE_COST;
       } else if (
         obstacle.text &&
-        !textExempt.has(obstacle.id) &&
+        obstacle.id !== farEnd &&
         segmentEntersRect(a, b, obstacle.text)
       ) {
         cost += TEXT_COST;
       } else if (obstacle.shape && segmentHugsRect(a, b, obstacle.shape, HUG_GAP)) {
         cost += HUG_COST;
+      } else if (
+        obstacle.id === farEnd &&
+        obstacle.shape &&
+        i < points.length - 2 &&
+        segmentHugsRect(a, b, obstacle.shape, OWN_HUG_GAP)
+      ) {
+        cost += OWN_HUG_COST;
       }
     }
   }

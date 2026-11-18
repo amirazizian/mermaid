@@ -703,9 +703,9 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
       ownShape,
       obstacles,
       exempt: (edge) => new Set([String(id), labelNodeIdOf(edge as RoutedEdge)]),
-      textExempt: (edge) => {
+      farEnd: (edge) => {
         const e = edge as RoutedEdge;
-        return new Set([String(e.start === id ? e.end : e.start)]);
+        return e.start === id ? e.end : e.start;
       },
       otherRoutes: (edge) =>
         routed.filter((e) => e !== edge && !here.has(e) && e.points).map((e) => e.points!),
