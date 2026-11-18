@@ -4,3 +4,5 @@ Fixes to shared code (shapes, edges, swimlane layout) made on this branch that s
 upstream separately. One line each: commit, area, what was wrong.
 
 - `35c095ef` swimlanes `direction/endpointClip.ts`: an edge given a diamond vertex that faces away from its route (others taken, bottom kept for a caption) turned at the vertex and ran back through the shape; it now leaves by a 12 px stub and turns outside.
+- `379dba63` swimlanes `direction/participantLinks.ts`: a message flow to a pool or lane was drawn as a straight run that ignored nodes of its own pool across it, running through a task; it now goes round them.
+- `22a8fb2a` swimlanes `direction/materializedGeometry.ts`: the crossing resolver's outer-channel reroutes could leave the pool of both ends (a sequence flow drawn outside its pool to avoid one crossing); candidates are now kept inside that pool.
