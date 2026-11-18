@@ -538,7 +538,7 @@ bpmn-beta LR
 
 `bpmn-beta` draws BPMN 2.0.2 process and collaboration diagrams: pools and lanes, events with all thirteen triggers, the five gateway types, tasks with their task types, collapsed and expanded sub-processes, event sub-processes and transactions, call activities, interrupting and non-interrupting boundary events, sequence flows with their default and conditional variants, message flows with their messages, associations in any direction, data objects and stores, text annotations and groups. The [BPMN element reference](./bpmnElements.md) lists every BPMN 2.0 element as supported, reachable through a workaround, or not written yet.
 
-It does not read or write BPMN XML, so a diagram cannot be opened in, or imported from, a BPMN modelling tool.
+It does not read BPMN XML. On this branch, `node scripts/bpmn-render.mjs --xml diagram.mmd` writes the diagram as BPMN 2.0.2 XML with its layout (diagram interchange), which BPMN modelling tools such as bpmn.io open; see `BPMN-SPINOFF.md` for what maps to what.
 
 ## From `bpmn-beta` to `bpmn`
 
