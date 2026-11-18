@@ -226,8 +226,9 @@ export function placeCaption(
 // Room before layout
 // ---------------------------------------------------------------------------
 
-/** Shapes that write their name under them and that flows pass through. */
-const PASSED_THROUGH = new Set(['bpmn-intermediate', 'bpmn-gateway']);
+/** Shapes that write their name under them, which flows can pass through (a start or end event
+ * with a message flow too). */
+const PASSED_THROUGH = new Set(['bpmn-start', 'bpmn-intermediate', 'bpmn-end', 'bpmn-gateway']);
 
 interface LayoutElements {
   nodes: { id: string; shape?: string; label?: string; metadata?: Record<string, unknown> }[];

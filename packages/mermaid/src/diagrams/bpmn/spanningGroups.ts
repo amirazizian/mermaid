@@ -49,6 +49,86 @@ function boxIn(layer: SVGGraphicsElement, element: SVGGraphicsElement): Box | un
   };
 }
 
+/**
+ * How far along the top edge to slide a title from where it starts, at most `room`, so that
+ * `isFree` holds for it, or 0 when no place along the edge is free.
+ */
+export function titleShift(
+  title: Box,
+  room: number,
+  isFree: (box: Box) => boolean,
+  step = 4
+): number {
+  for (let shift = 0; shift <= room; shift += step) {
+    if (isFree({ ...title, left: title.left + shift, right: title.right + shift })) {
+      return shift;
+    }
+  }
+  return 0;
+}
+
+const LINE_ROOM = 3;
+
+/** Slides a group's title along its top edge off any flow or text it is drawn on. */
+function slideTitleClear(svg: SVGSVGElement, text: SVGTextElement, edge: number): void {
+  if (typeof text.getBoundingClientRect !== 'function') {
+    return;
+  }
+  const at = text.getBoundingClientRect();
+  if (!(at.width > 0)) {
+    return;
+  }
+  const scale = text.getScreenCTM?.()?.a || 1;
+  const title: Box = { left: at.left, top: at.top, right: at.right, bottom: at.bottom };
+  const points: { x: number; y: number }[] = [];
+  for (const path of svg.querySelectorAll<SVGPathElement>('g.edgePaths path')) {
+    const ctm = path.getScreenCTM?.();
+    const length = typeof path.getTotalLength === 'function' ? path.getTotalLength() : 0;
+    if (!ctm || !length) {
+      continue;
+    }
+    for (let along = 0; along <= length; along += 2 / scale) {
+      const point = path.getPointAtLength(along).matrixTransform(ctm);
+      points.push({ x: point.x, y: point.y });
+    }
+  }
+  const texts = [
+    ...svg.querySelectorAll('g.edgeLabel, g.node > g.label, g.cluster g.cluster-label'),
+  ]
+    .filter((label) => label.textContent?.trim())
+    .map((label) => label.getBoundingClientRect());
+  // Lane and pool borders: a vertical one running through the title.
+  const borders = [
+    ...svg.querySelectorAll('g.cluster rect.swimlane-body, g.cluster rect.pool-body'),
+  ].flatMap((rect) => {
+    const r = rect.getBoundingClientRect();
+    return [r.left, r.right].map((x) => ({ x, top: r.top, bottom: r.bottom }));
+  });
+  const isFree = (box: Box) =>
+    !borders.some(
+      (b) =>
+        b.x > box.left - LINE_ROOM &&
+        b.x < box.right + LINE_ROOM &&
+        b.top < box.bottom &&
+        box.top < b.bottom
+    ) &&
+    !points.some(
+      (p) =>
+        p.x > box.left - LINE_ROOM &&
+        p.x < box.right + LINE_ROOM &&
+        p.y > box.top - LINE_ROOM &&
+        p.y < box.bottom + LINE_ROOM
+    ) &&
+    !texts.some(
+      (t) => t.left < box.right && box.left < t.right && t.top < box.bottom && box.top < t.bottom
+    );
+  const room = (edge - at.width / scale) * scale;
+  const shift = titleShift(title, room, isFree);
+  if (shift > 0) {
+    text.setAttribute('x', String(Number(text.getAttribute('x')) + shift / scale));
+  }
+}
+
 export function drawSpanningGroups(svg: SVGSVGElement | null, groups: SpanningGroup[]): void {
   if (!svg || groups.length === 0 || typeof svg.getScreenCTM !== 'function') {
     return;
@@ -88,6 +168,9 @@ export function drawSpanningGroups(svg: SVGSVGElement | null, groups: SpanningGr
       text.setAttribute('y', String(top + 14));
       text.textContent = group.label;
       element.append(text);
+      layer.append(element);
+      slideTitleClear(svg, text, right - left - 20);
+      continue;
     }
     layer.append(element);
   }

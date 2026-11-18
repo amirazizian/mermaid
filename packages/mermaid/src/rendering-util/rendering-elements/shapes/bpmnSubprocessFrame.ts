@@ -3,7 +3,7 @@ import type { Node } from '../../types.js';
 import { labelHelper, getNodeClasses, updateNodeBounds } from './util.js';
 import { styles2String } from './handDrawnShapeStyles.js';
 import { createRoundedRectPathD } from './roundedRectPath.js';
-import { faceProjectIntersect, glyphSvg, type BpmnNode } from './bpmnShapeCore.js';
+import { faceProjectIntersect, fitWrappedLabel, glyphSvg, type BpmnNode } from './bpmnShapeCore.js';
 
 const RADIUS = 10;
 const DOUBLE_GAP = 3;
@@ -32,11 +32,18 @@ export async function bpmnSubprocessFrame<T extends SVGGraphicsElement>(
   };
   const border = metadata.frameBorder ?? 'solid';
 
-  const { shapeSvg, bbox, label } = await labelHelper(
+  const {
+    shapeSvg,
+    bbox: measured,
+    label,
+  } = await labelHelper(
     parent,
     node,
     getNodeClasses(node, `bpmn-subprocess-frame frame-${border}`)
   );
+  // A wrapped title takes the width of its longest line, so it sits in the corner.
+  const bbox = fitWrappedLabel(label, measured);
+  label.select('foreignObject > div').style('text-align', 'left');
 
   const content = metadata.content ?? { width: 0, height: 0 };
   const markers = frameNode.markers ?? [];
