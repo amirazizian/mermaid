@@ -81,6 +81,38 @@ function labelOverlapsOwnMarker(rect: RectBounds, pts: { x: number; y: number }[
   );
 }
 
+/** How far a label keeps from a bend of its own line, and from a lane border. */
+const CORNER_ROOM = 4;
+const LANE_ROOM = 3;
+/** How far past its source's end clearance a branch label sits. */
+const BRANCH_LABEL_GAP = 4;
+/** How finely, and at most how many places, the search tries along one stretch of a line. */
+const SEARCH_STEP = 4;
+const MAX_STEPS = 40;
+/** What a label set across a stretch of line, rather than along it, costs, in px of distance. */
+const ACROSS_PENALTY = 16;
+
+/** The points where a polyline turns. */
+export function bendsOf(pts: { x: number; y: number }[]): { x: number; y: number }[] {
+  const visible = dedupeConsecutivePoints(pts);
+  const bends: { x: number; y: number }[] = [];
+  for (let i = 1; i < visible.length - 1; i++) {
+    const before = visible[i - 1];
+    const at = visible[i];
+    const after = visible[i + 1];
+    const cross = (at.x - before.x) * (after.y - at.y) - (at.y - before.y) * (after.x - at.x);
+    if (Math.abs(cross) > EPS) {
+      bends.push(at);
+    }
+  }
+  return bends;
+}
+
+/** Whether `rect` reaches over a border of `lane`: it overlaps the lane without being inside. */
+export function crossesBorder(lane: RectBounds, rect: RectBounds): boolean {
+  return rectsOverlap(lane, rect) && !rectContainsRect(lane, rect);
+}
+
 export function anchorLabelsToPolyline(edges: Edge[], nodeByIdMap: Map<string, Node>): void {
   // Build a set of foreign polylines once for overlap checks. Labelled
   // originals that haven't been anchored yet are still included — their
@@ -191,6 +223,25 @@ export function anchorLabelsToPolyline(edges: Edge[], nodeByIdMap: Map<string, N
     }
     return undefined;
   };
+
+  const innermostLaneHolding = (rect: RectLite): string | undefined => {
+    let found: { id: string; area: number } | undefined;
+    for (const { id, rect: laneRect } of laneGroups) {
+      const area = (laneRect.right - laneRect.left) * (laneRect.bottom - laneRect.top);
+      if (rectContainsRect(laneRect, rect) && (!found || area < found.area)) {
+        found = { id, area };
+      }
+    }
+    return found?.id;
+  };
+
+  // How many drawn edges leave each node: a node with more than one is a branch point.
+  const outgoingCount = new Map<string, number>();
+  for (const other of edges) {
+    if (!other.isLayoutOnly && other.start) {
+      outgoingCount.set(other.start, (outgoingCount.get(other.start) ?? 0) + 1);
+    }
+  }
 
   const overlapsPlacedLabel = (labelId: string, rect: RectLite): boolean =>
     placedLabelRects.some(
@@ -437,7 +488,83 @@ export function anchorLabelsToPolyline(edges: Edge[], nodeByIdMap: Map<string, N
       return undefined;
     };
 
+    // The search for the best place: every point along every straight stretch of the line
+    // where the whole label stays on that stretch, clear of the line's own bends, of other
+    // lines, shapes and labels, and inside a lane. The place nearest the middle of the line
+    // wins; on a branch (its source has other edges leaving it) the place nearest the source,
+    // which is where a reader looks for the condition of a gateway or decision.
+    const bestPlacement = ():
+      | { laneId: string; anchor: { midX: number; midY: number } }
+      | undefined => {
+      const along: number[] = [0];
+      for (let i = 0; i < pts.length - 1; i++) {
+        along.push(
+          along[i] + Math.abs(pts[i + 1].x - pts[i].x) + Math.abs(pts[i + 1].y - pts[i].y)
+        );
+      }
+      const total = along[along.length - 1];
+      if (total < EPS) {
+        return undefined;
+      }
+      const isBranch = (outgoingCount.get(edge.start ?? '') ?? 0) > 1;
+      const first = segments[0];
+      const firstExtent = first.orientation === 'horizontal' ? lw / 2 : lh / 2;
+      const target = isBranch
+        ? along[first.idx] + LABEL_ENDPOINT_CLEARANCE + firstExtent + BRANCH_LABEL_GAP
+        : total / 2;
+      const bends = bendsOf(pts);
+      let best:
+        | { laneId: string; anchor: { midX: number; midY: number }; cost: number }
+        | undefined;
+      for (const seg of segments) {
+        const a = pts[seg.idx];
+        const b = pts[seg.idx + 1];
+        const extent = seg.orientation === 'horizontal' ? lw / 2 : lh / 2;
+        const room = seg.length - 2 * (extent + CORNER_ROOM);
+        if (room < 0) {
+          continue;
+        }
+        const steps = Math.max(1, Math.min(MAX_STEPS, Math.ceil(room / SEARCH_STEP)));
+        for (let k = 0; k <= steps; k++) {
+          const offset = extent + CORNER_ROOM + (room * k) / steps;
+          const t = offset / seg.length;
+          const anchor = { midX: a.x + (b.x - a.x) * t, midY: a.y + (b.y - a.y) * t };
+          if (!labelClearsTerminalEndpoints(seg, anchor)) {
+            continue;
+          }
+          const rect = rectFromCenterSize(anchor.midX, anchor.midY, lw, lh);
+          const roomy = inflateRect(rect, LANE_ROOM);
+          if (laneGroups.some(({ rect: lane }) => crossesBorder(lane, roomy))) {
+            continue;
+          }
+          const laneId = innermostLaneHolding(rect);
+          if (!laneId && laneGroups.length > 0) {
+            continue;
+          }
+          const cornerZone = inflateRect(rect, CORNER_ROOM);
+          if (bends.some((p) => pointInsideRectInclusive({ midX: p.x, midY: p.y }, cornerZone))) {
+            continue;
+          }
+          if (
+            labelOverlapsOwnMarker(rect, pts) ||
+            overlapsPlacedLabel(labelId, inflateRect(rect, LABEL_PLACEMENT_BUFFER)) ||
+            labelOverlapsAnything(labelId, edge.id, rect)
+          ) {
+            continue;
+          }
+          const position = along[seg.idx] + offset;
+          const cost =
+            Math.abs(position - target) + (seg.orientation === labelLongAxis ? 0 : ACROSS_PENALTY);
+          if (!best || cost < best.cost) {
+            best = { laneId: laneId ?? labelNode.parentId ?? '', anchor, cost };
+          }
+        }
+      }
+      return best && { laneId: best.laneId, anchor: best.anchor };
+    };
+
     const chosen =
+      bestPlacement() ??
       tryPool(poolBase) ??
       (poolBase.length < segments.length ? tryPool(segments) : undefined) ??
       findLaneContainingFallback(segments, true) ??
