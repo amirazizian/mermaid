@@ -1,0 +1,18 @@
+bpmn-beta LR
+title Lanes nested in lanes
+  pool company "Company"
+    lane sales "Sales"
+      lane inside "Inside sales"
+        start s1 "Lead received"
+        task phone "Call the lead"
+      lane field "Field sales"
+        task meet "Visit the customer"
+    lane ops "Operations"
+      lane stock "Warehouse"
+        task ship "Ship the order"
+      lane billing "Billing"
+        task bill "Send the invoice"
+        end e1 "Order fulfilled"
+  pool customer "Customer"
+  s1 --> phone --> meet --> ship --> bill --> e1
+  bill -.-> customer

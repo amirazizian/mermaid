@@ -409,6 +409,7 @@ class BpmnVisitor extends BpmnBaseVisitor {
     }
     this.assignGeneratedIds();
     this.assignParents();
+    this.checkNestedLanes();
     this.checkSubprocesses();
     this.checkSpanningGroups();
     const declared = this.leftOut?.size
@@ -674,6 +675,29 @@ class BpmnVisitor extends BpmnBaseVisitor {
    * sub-process, an event sub-process has one start event, which names its trigger, and
    * neither it nor a flow crosses into or out of a sub-process.
    */
+  /** A lane that holds lanes holds nothing else: what it would hold belongs in one of them. */
+  private checkNestedLanes() {
+    const byId = new Map(this.nodes.map((node) => [node.id, node]));
+    const laneSets = new Set(
+      this.nodes
+        .filter((node) => node.kind === 'lane' && node.parentId)
+        .map((node) => byId.get(node.parentId!))
+        .filter((parent) => parent?.kind === 'lane')
+        .map((parent) => parent!.id)
+    );
+    for (const node of this.nodes) {
+      if (node.kind === 'lane' || !node.parentId || !laneSets.has(node.parentId)) {
+        continue;
+      }
+      const at = written.get(node);
+      this.attempt(at, () => {
+        throw new Error(
+          `BPMN error${atText(at)}: ${describe(node)} cannot be in the lane "${node.parentId}", because that lane holds lanes. Indent it under one of its lanes instead.`
+        );
+      });
+    }
+  }
+
   private checkSubprocesses() {
     const byId = new Map(this.nodes.map((node) => [node.id, node]));
     for (const node of this.nodes) {

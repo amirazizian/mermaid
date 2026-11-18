@@ -93,6 +93,30 @@ bpmn-beta LR
   s1 --> t1 --> t2 --> e1
 ```
 
+A lane can itself be divided into lanes, by indenting them under it, to any depth. The outer
+lane is drawn with its own title band beside the title bands of the lanes in it, and those lanes
+are stacked inside it. A lane that holds lanes holds nothing else: its tasks, events and other
+elements go in one of its lanes, and an element written straight under it is refused.
+
+```mermaid-example
+bpmn-beta LR
+  pool "Company"
+    lane sales "Sales"
+      lane inside "Inside sales"
+        start s1 "Lead received"
+        task t1 "Call the lead"
+      lane field "Field sales"
+        task t2 "Visit the customer"
+    lane wh "Warehouse"
+      task t3 "Ship the order"
+      end e1 "Order fulfilled"
+  s1 --> t1 --> t2 --> t3 --> e1
+```
+
+```
+BPMN error at line N, column C: a task cannot be in the lane "sales", because that lane holds lanes. Indent it under one of its lanes instead.
+```
+
 ## Events
 
 An event is written as its position, an optional trigger, then the name and label.

@@ -22,6 +22,13 @@ export interface LaneModel {
 
   lanesByPool: Map<string, string[]>;
   hasPools: boolean;
+
+  /** Whether a group is a lane that holds lanes: a frame round them, not a lane itself. */
+  isLaneSet: (id: string) => boolean;
+  /** How many lanes that hold lanes a lane or lane set sits in: 0 for one straight in a pool. */
+  laneDepth: (id: string) => number;
+  /** The lanes that hold lanes, outermost first. */
+  laneSets: string[];
 }
 
 export function buildLaneModel(nodes: Node[]): LaneModel {
@@ -41,21 +48,58 @@ export function buildLaneModel(nodes: Node[]): LaneModel {
     }
   }
 
+  // A lane written under a lane makes its parent a set of lanes: only the lanes with no lane
+  // under them hold content, and the lanes round them are framed about them afterwards.
+  const laneSets = new Set<string>();
+  for (const node of nodes) {
+    const parent = node.parentId ? byId.get(node.parentId) : undefined;
+    if (
+      node.isGroup &&
+      readLaneRole(node) === 'lane' &&
+      parent?.isGroup &&
+      readLaneRole(parent) === 'lane'
+    ) {
+      laneSets.add(parent.id);
+    }
+  }
+  const holdsLanes = (id: string | undefined) =>
+    id !== undefined && (pools.has(id) || laneSets.has(id));
+
   const lanes = new Set<string>();
   const lanesByPool = new Map<string, string[]>();
   for (const node of nodes) {
-    if (!node.isGroup || pools.has(node.id)) {
+    if (!node.isGroup || pools.has(node.id) || laneSets.has(node.id)) {
       continue;
     }
-    if (node.parentId && pools.has(node.parentId)) {
+    if (node.parentId && holdsLanes(node.parentId)) {
       lanes.add(node.id);
-      const siblings = lanesByPool.get(node.parentId) ?? [];
-      siblings.push(node.id);
-      lanesByPool.set(node.parentId, siblings);
+      let poolId: string | undefined = node.parentId;
+      const seen = new Set<string>();
+      while (poolId && laneSets.has(poolId) && !seen.has(poolId)) {
+        seen.add(poolId);
+        poolId = byId.get(poolId)?.parentId;
+      }
+      if (poolId && pools.has(poolId)) {
+        const siblings = lanesByPool.get(poolId) ?? [];
+        siblings.push(node.id);
+        lanesByPool.set(poolId, siblings);
+      }
     } else if (!node.parentId) {
       lanes.add(node.id);
     }
   }
+
+  const laneDepth = (id: string): number => {
+    let depth = 0;
+    const seen = new Set<string>([id]);
+    let current = byId.get(id)?.parentId;
+    while (current && laneSets.has(current) && !seen.has(current)) {
+      seen.add(current);
+      depth++;
+      current = byId.get(current)?.parentId;
+    }
+    return depth;
+  };
 
   const walk = (id: string, stopAt: Set<string>): string | null => {
     const seen = new Set<string>([id]);
@@ -88,6 +132,9 @@ export function buildLaneModel(nodes: Node[]): LaneModel {
     poolIdOf: (id) => (pools.has(id) ? id : walk(id, pools)),
     lanesByPool,
     hasPools: pools.size > 0,
+    isLaneSet: (id) => laneSets.has(id),
+    laneDepth,
+    laneSets: [...laneSets].sort((a, b) => laneDepth(a) - laneDepth(b)),
   };
 }
 

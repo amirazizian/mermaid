@@ -152,7 +152,12 @@ function dropLanesEmptiedBySharedNodes(layout: LayoutData, nodes: Node[]): void 
 
 function warnAboutNestedGroups(nodes: Node[], model: LaneModel): void {
   for (const node of nodes) {
-    if (node.isGroup && !model.isLane(node.id) && !model.isPool(node.id)) {
+    if (
+      node.isGroup &&
+      !model.isLane(node.id) &&
+      !model.isPool(node.id) &&
+      !model.isLaneSet(node.id)
+    ) {
       log.warn(
         `Swimlane subgraph "${node.id}" is nested in "${node.parentId}"; only top-level subgraphs are lanes, so it is drawn as a plain box.`
       );
@@ -167,7 +172,7 @@ export function prepareLayoutForSwimlanes(layout: LayoutData): void {
   const laneModel = buildLaneModel(nodes);
   warnAboutNestedGroups(nodes, laneModel);
   for (const node of nodes) {
-    const isLane = laneModel.isLane(node.id);
+    const isLane = laneModel.isLane(node.id) || laneModel.isLaneSet(node.id);
     if (!isLane && !laneModel.isPool(node.id)) {
       continue;
     }

@@ -10,6 +10,7 @@ import {
 } from './direction/endpointClip.js';
 import { orthogonalizePolyline, simplifyPolyline } from './direction/geometry.js';
 import { framePoolsTb } from './direction/framePoolsTb.js';
+import { frameLaneSets } from './direction/laneSets.js';
 import { openEmptyLaneColumnsInPools, stackEmptyLanesTb } from './direction/emptyLanesTb.js';
 import { linkParticipantBands } from './direction/participantLinks.js';
 import { separateParticipants } from './direction/separateParticipants.js';
@@ -212,4 +213,7 @@ export function postProcessSwimlaneLayout(layout: LayoutData, direction?: string
   meetDiamondsAtTheirVertex(edges, nodeByIdMap);
   approachBordersSquarely(edges, nodeByIdMap);
   anchorLabelsOfDeclaredShapes(edges, nodeByIdMap, contentNodes);
+
+  // A lane that holds lanes is framed round them once every route is final.
+  frameLaneSets(layout, direction);
 }

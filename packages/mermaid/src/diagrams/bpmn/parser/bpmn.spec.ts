@@ -271,6 +271,59 @@ accDescr {
       expect(parsed.nodes.find((node) => node.id === 'b')?.parentId).toBe('a');
     });
 
+    it('accepts lanes nested in lanes, in a pool or at the top level, to any depth', () => {
+      const parsed = parseBpmn(
+        [
+          'bpmn-beta LR',
+          '  pool p "Company"',
+          '    lane sales "Sales"',
+          '      lane inside "Inside sales"',
+          '        lane north "North"',
+          '          task t1 "Call"',
+          '      lane field "Field sales"',
+          '        task t2 "Visit"',
+          '    lane wh "Warehouse"',
+          '      task t3 "Ship"',
+          '  lane ops "Operations"',
+          '    lane a "Intake"',
+          '      task t4 "Register"',
+          '',
+        ].join('\n')
+      );
+      const parentOf = Object.fromEntries(parsed.nodes.map((node) => [node.id, node.parentId]));
+      expect(parentOf).toMatchObject({
+        sales: 'p',
+        inside: 'sales',
+        north: 'inside',
+        t1: 'north',
+        field: 'sales',
+        t2: 'field',
+        wh: 'p',
+        a: 'ops',
+        t4: 'a',
+      });
+    });
+
+    it.each([
+      [
+        'a task beside the lanes of a lane',
+        '    lane m "M"\n      task a "A"\n    task b "B"\n',
+        'line 5, column 5: a task cannot be in the lane "l", because that lane holds lanes',
+      ],
+      [
+        'a task before the lanes of a lane',
+        '    start s "S"\n    lane m "M"\n      task a "A"\n',
+        'line 3, column 5: a start event cannot be in the lane "l", because that lane holds lanes',
+      ],
+      [
+        'a note beside the lanes of a lane',
+        '    lane m "M"\n      task a "A"\n    note n "N"\n',
+        'line 5, column 5: a note cannot be in the lane "l"',
+      ],
+    ])('refuses %s, at that element', (_name, body, message) => {
+      expect(() => parseBpmn(`${HEAD}${body}`)).toThrow(message);
+    });
+
     it('accepts contents under a pool, a lane and a group', () => {
       const parsed = parseBpmn(
         'bpmn-beta LR\n  pool p "P"\n    lane l "L"\n      task a "A"\n  group g "G"\n    task b "B"\n'

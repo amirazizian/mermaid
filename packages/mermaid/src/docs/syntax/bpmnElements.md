@@ -59,12 +59,12 @@ under another `task` is refused. A `subprocess` with elements under it is drawn 
 
 ## Containers
 
-| Written      | Element              | Notes                                                                               |
-| ------------ | -------------------- | ----------------------------------------------------------------------------------- |
-| `pool`       | Pool, or participant | A pool with no lanes is drawn as one; with no contents at all it is a black box     |
-| `lane`       | Lane                 | Divides one participant, so lanes share their borders                               |
-| `group`      | Group                | Drawn around its members, carries no execution semantics, and cannot yet span pools |
-| `subprocess` | Expanded sub-process | Drawn as a frame around the elements indented under it                              |
+| Written      | Element              | Notes                                                                                |
+| ------------ | -------------------- | ------------------------------------------------------------------------------------ |
+| `pool`       | Pool, or participant | A pool with no lanes is drawn as one; with no contents at all it is a black box      |
+| `lane`       | Lane                 | Divides one participant, or a lane, so lanes share their borders; nests to any depth |
+| `group`      | Group                | Drawn around its members, carries no execution semantics, and cannot yet span pools  |
+| `subprocess` | Expanded sub-process | Drawn as a frame around the elements indented under it                               |
 
 A participant with nothing inside it is legal and useful: a collaboration often shows who a
 message goes to without saying what they do with it. A message flow may name the pools
@@ -306,6 +306,7 @@ write yet.
 | Pool, black box          | Supported | `pool p "..."` with nothing inside |
 | Participant multiplicity | Supported | `pool p "..." @{ multiple: true }` |
 | Lane                     | Supported | `lane l "..."`                     |
+| Nested lane              | Supported | `lane` indented under a `lane`     |
 | Text annotation          | Supported | `note n "..."`                     |
 | Group                    | Supported | `group g "..."`, within one lane   |
 | Group spanning pools     | None      | A group is held by one lane        |
@@ -358,6 +359,13 @@ subprocess holds other elements, and a boundary event has to sit directly under 
 ```txt
 BPMN error at line N, column C: a task cannot be indented under the task "a", because only a pool, a lane, a group or a subprocess holds other elements.
 BPMN error at line N, column C: a boundary event must be indented under the activity it is attached to.
+```
+
+**An element beside the lanes of a lane.** A lane that holds lanes holds nothing else, so a
+task, an event or any other element indented straight under it is refused:
+
+```txt
+BPMN error at line N, column C: a task cannot be in the lane "sales", because that lane holds lanes. Indent it under one of its lanes instead.
 ```
 
 **An activity marker that does not fit.** `ad-hoc` only marks a `subprocess`, an activity takes
