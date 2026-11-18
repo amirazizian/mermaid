@@ -34,6 +34,7 @@
     "build": "pnpm build:esbuild && pnpm build:types",
     "build:esbuild": "pnpm run -r clean && tsx .esbuild/build.ts",
     "build:mermaid": "pnpm build:esbuild --mermaid",
+    "bpmn:render": "node scripts/bpmn-render.mjs",
     "build:coverage": "MERMAID_COVERAGE=true pnpm build:esbuild",
     "build:mermaid:full": "pnpm clean && pnpm build:mermaid && pnpm copy:editor && pnpm copy:mermaid && pnpm copy:dompurify && pnpm serve:dist",
     "build:viz": "pnpm build:esbuild --visualize",
