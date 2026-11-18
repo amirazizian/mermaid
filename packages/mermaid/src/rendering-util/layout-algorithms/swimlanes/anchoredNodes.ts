@@ -90,6 +90,53 @@ export function defaultAnchorSide(space: 'canonical' | 'final', direction: Direc
   return direction === 'LR' || direction === 'RL' ? 'bottom' : 'right';
 }
 
+/**
+ * The side a node attached to its host's border (no stand-off gap, such as a boundary event)
+ * sits on when it names none: in TB, the bottom, as in LR. On the right side, in the middle of
+ * the host, it covered the host's own label, and a flow leaving it ran down the host's border.
+ */
+function attachedSide(anchor: NodeAnchor, direction: Direction): AnchorSide | undefined {
+  return direction === 'TB' && !anchor.side && !anchor.gap ? 'bottom' : undefined;
+}
+
+/**
+ * How far an attached run on a TB host's bottom moves from the middle towards the right end of
+ * the border, keeping BORDER_INSET from the corner, so the flow that leaves the host's bottom
+ * in the middle passes it by.
+ */
+function towardsTheEnd(
+  entry: BucketEntry,
+  side: AnchorSide,
+  direction: Direction,
+  hostExtent: number,
+  runExtent: number
+): number {
+  if (side !== 'bottom' || attachedSide(entry.anchor, direction) !== 'bottom') {
+    return 0;
+  }
+  return Math.max(0, hostExtent / 2 - runExtent / 2 - BORDER_INSET);
+}
+
+/**
+ * How far the nodes attached to each host's bottom border in TB (see `attachedSide`) reach
+ * below that border: half their height, caption room included. The gap under the host's layer
+ * keeps this much more room, so they do not reach into the next layer.
+ */
+export function attachedReachBelow(nodes: Node[], direction?: Direction): Map<string, number> {
+  const reach = new Map<string, number>();
+  for (const bucket of bucketByHostAndSide(nodes, (anchor) =>
+    attachedSide(anchor, direction ?? 'TB') === 'bottom' ? 'bottom' : 'right'
+  ).values()) {
+    const { hostId, side } = bucket[0];
+    if (side !== 'bottom') {
+      continue;
+    }
+    const half = Math.max(...bucket.map((entry) => (entry.node.height ?? 0) / 2));
+    reach.set(hostId, Math.max(reach.get(hostId) ?? 0, half));
+  }
+  return reach;
+}
+
 export interface AnchorPin {
   nodeId: string;
   hostId: string;
@@ -224,7 +271,10 @@ export function anchorFootprints(
 ): Map<string, Partial<Record<AnchorSide, AnchorFootprint>>> {
   const fallback = defaultAnchorSide('final', direction ?? 'TB');
   const footprints = new Map<string, Partial<Record<AnchorSide, AnchorFootprint>>>();
-  for (const bucket of bucketByHostAndSide(nodes, (anchor) => anchor.side ?? fallback).values()) {
+  for (const bucket of bucketByHostAndSide(
+    nodes,
+    (anchor) => attachedSide(anchor, direction ?? 'TB') ?? anchor.side ?? fallback
+  ).values()) {
     if (!bucket.some((entry) => entry.anchor.gap)) {
       continue;
     }
@@ -340,10 +390,13 @@ export function pinAnchoredNodes(
 ): AnchorPin[] {
   const nodes = layout.nodes ?? [];
   const byId = new Map(nodes.map((node) => [node.id, node]));
-  const buckets = bucketByHostAndSide(nodes, (anchor) =>
-    opts.space === 'canonical'
-      ? defaultAnchorSide('canonical', opts.direction)
-      : (anchor.side ?? defaultAnchorSide('final', opts.direction))
+  const buckets = bucketByHostAndSide(
+    nodes,
+    (anchor) =>
+      attachedSide(anchor, opts.direction) ??
+      (opts.space === 'canonical'
+        ? defaultAnchorSide('canonical', opts.direction)
+        : (anchor.side ?? defaultAnchorSide('final', opts.direction)))
   );
 
   const pins: AnchorPin[] = [];
@@ -368,17 +421,24 @@ export function pinAnchoredNodes(
     }
 
     const horizontal = side === 'top' || side === 'bottom';
-    const { offsets } = packAlongBorder(
+    const { offsets, total } = packAlongBorder(
       bucket.map((entry) => (horizontal ? entry.node.width : entry.node.height) ?? 0)
     );
 
+    // A lone node's run is as wide as its drawn shape; its caption may reach past the corner.
+    const drawnWidth = (bucket[0].node.metadata?.drawnExtent as { width?: unknown } | undefined)
+      ?.width;
+    const runExtent =
+      bucket.length === 1 && typeof drawnWidth === 'number' && drawnWidth > 0 ? drawnWidth : total;
     bucket.forEach((entry, position) => {
       const offset = offsets[position];
       const clearance = entry.anchor.gap ?? 0;
       const span = ((horizontal ? entry.node.height : entry.node.width) ?? 0) / 2;
       const push = clearance > 0 ? clearance + span : 0;
       const alongHalf = ((horizontal ? entry.node.width : entry.node.height) ?? 0) / 2;
-      const along = centreAlongBorder(offset, horizontal, clearance, alongHalf);
+      const along =
+        centreAlongBorder(offset, horizontal, clearance, alongHalf) +
+        towardsTheEnd(entry, side, opts.direction, horizontal ? hw : hh, runExtent);
       const x = horizontal ? hx + along : hx + (side === 'right' ? hw / 2 + push : -hw / 2 - push);
       const y = horizontal ? hy + (side === 'bottom' ? hh / 2 + push : -hh / 2 - push) : hy + along;
       entry.node.x = x;

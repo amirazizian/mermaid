@@ -2,7 +2,12 @@ import type { Graph, OrderedLayers, Coordinates, NodeId, EdgeRef, Node } from '.
 import { COORDINATES } from './config.js';
 import { flowAxisStretch } from './direction/lrTransform.js';
 import { createTopLaneResolver, resolveTopLaneOrder } from './phase2.options.js';
-import { anchorFootprints, defaultAnchorSide, type AnchorSide } from './anchoredNodes.js';
+import {
+  anchorFootprints,
+  attachedReachBelow,
+  defaultAnchorSide,
+  type AnchorSide,
+} from './anchoredNodes.js';
 
 const OPPOSITE_SIDE: Record<AnchorSide, AnchorSide> = {
   left: 'right',
@@ -213,6 +218,18 @@ export function assignCoordinates(
   }
   for (const [gap, need] of labelGapNeed.entries()) {
     extraLayerGaps[gap] += need;
+  }
+
+  // Nodes attached to a host's bottom border reach into the gap under its layer.
+  const reachBelowLayer: number[] = layers.map(() => 0);
+  for (const [hostId, reach] of attachedReachBelow(gWithDummies.layout?.nodes ?? [], direction)) {
+    const rank = rankOf.get(hostId);
+    if (rank !== undefined) {
+      reachBelowLayer[rank] = Math.max(reachBelowLayer[rank], reach);
+    }
+  }
+  for (const [rank, reach] of reachBelowLayer.entries()) {
+    extraLayerGaps[rank] += reach;
   }
 
   const footprints = anchorFootprints(gWithDummies.layout?.nodes ?? [], direction);

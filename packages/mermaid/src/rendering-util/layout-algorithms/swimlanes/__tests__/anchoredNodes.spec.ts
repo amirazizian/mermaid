@@ -7,6 +7,7 @@ import {
   collectAnchoredIds,
   defaultAnchorSide,
   pinAnchoredNodes,
+  attachedReachBelow,
   readAnchor,
   resolveAnchorHostId,
 } from '../anchoredNodes.js';
@@ -404,7 +405,10 @@ describe('reserving the room an anchored run is placed in', () => {
       const border = horizontal
         ? hostNode.y! + hostNode.height! / 2
         : hostNode.x! + hostNode.width! / 2;
-      for (const placed of nodes.slice(1)) {
+      // In TB a node on the border (no stand-off) sits on the host's bottom, outside this run.
+      const inRun = (node: Node) =>
+        direction !== 'TB' || Boolean((node.metadata?.anchorTo as { gap?: number })?.gap);
+      for (const placed of nodes.slice(1).filter(inRun)) {
         const half = (horizontal ? placed.width! : placed.height!) / 2;
         const at = horizontal ? placed.x! : placed.y!;
         expect(at - half).toBeGreaterThanOrEqual(centre - footprint.before);
@@ -1505,5 +1509,28 @@ describe('how far a stand-off is cleared, and what stops it', () => {
       );
       expect(a.x).toBeGreaterThan(START.x);
     });
+  });
+});
+
+describe('a node on the border of a TB host', () => {
+  it('reaches below the host by half its height, caption room included', () => {
+    const nodes = [
+      node('h', { x: 0, y: 0, width: 100, height: 50 }),
+      anchored('b', { hostId: 'h' }, { width: 46, height: 96 }),
+    ];
+    expect(attachedReachBelow(nodes, 'TB').get('h')).toBe(48);
+  });
+
+  it('reaches nowhere below in LR, nor when it stands off', () => {
+    const onBorder = [
+      node('h', { x: 0, y: 0, width: 100, height: 50 }),
+      anchored('b', { hostId: 'h' }, { width: 46, height: 96 }),
+    ];
+    const standingOff = [
+      node('h', { x: 0, y: 0, width: 100, height: 50 }),
+      anchored('b', { hostId: 'h', gap: 20 }, { width: 46, height: 96 }),
+    ];
+    expect(attachedReachBelow(onBorder, 'LR').size).toBe(0);
+    expect(attachedReachBelow(standingOff, 'TB').size).toBe(0);
   });
 });

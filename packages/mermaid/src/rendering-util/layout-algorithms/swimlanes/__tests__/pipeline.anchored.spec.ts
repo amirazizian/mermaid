@@ -71,21 +71,18 @@ describe('anchored nodes in the swimlane pipeline', () => {
   // The load-bearing assertion. The LR case is measured in FINAL coordinates, after
   // applyLrDirectionTransform, which moves a host without transforming its width and
   // height. A pin written only in helpers.ts, before that transform, fails this.
+  // In TB the pin sits on the bottom border towards its right end, clear of the host's label
+  // and of the flow that leaves the host's bottom in the middle; in LR in the bottom's middle.
   it.each([
-    ['TB', 'right'],
-    ['LR', 'bottom'],
-  ] as const)('puts the pin on the host border in final space (%s)', (direction, side) => {
+    ['TB', 100 / 2 - 36 / 2 - 8],
+    ['LR', 0],
+  ] as const)('puts the pin on the host border in final space (%s)', (direction, along) => {
     const layout = withAnchor(direction);
     const host = find(layout, 'B');
     const pin = find(layout, 'pin');
 
-    if (side === 'right') {
-      expect(pin.x).toBeCloseTo(host.x! + host.width! / 2, 6);
-      expect(pin.y).toBeCloseTo(host.y!, 6);
-    } else {
-      expect(pin.y).toBeCloseTo(host.y! + host.height! / 2, 6);
-      expect(pin.x).toBeCloseTo(host.x!, 6);
-    }
+    expect(pin.y).toBeCloseTo(host.y! + host.height! / 2, 6);
+    expect(pin.x).toBeCloseTo(host.x! + along, 6);
   });
 
   // Re-pointing an anchored node's flow at its host has to give exactly the layout you
