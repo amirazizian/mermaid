@@ -14,6 +14,13 @@ describe('titleShift', () => {
     expect(titleShift(title, 100, isFree)).toBe(36);
   });
 
+  it('slides back to the left when that is nearer', () => {
+    // A vertical line at x = 55, near the title's right end.
+    const isFree = (box: typeof title) => !(box.left < 58 && box.right > 52);
+    expect(titleShift(title, 100, isFree, 40)).toBe(-8);
+    expect(titleShift(title, 100, isFree)).toBe(48);
+  });
+
   it('stays put when the edge has no free place', () => {
     expect(titleShift(title, 20, () => false)).toBe(0);
   });

@@ -50,18 +50,25 @@ function boxIn(layer: SVGGraphicsElement, element: SVGGraphicsElement): Box | un
 }
 
 /**
- * How far along the top edge to slide a title from where it starts, at most `room`, so that
- * `isFree` holds for it, or 0 when no place along the edge is free.
+ * How far along the top edge to slide a title from where it starts, at most `room` to the
+ * right and `back` to the left, so that `isFree` holds for it: the free place nearest where it
+ * starts, or 0 when no place along the edge is free.
  */
 export function titleShift(
   title: Box,
   room: number,
   isFree: (box: Box) => boolean,
+  back = 0,
   step = 4
 ): number {
-  for (let shift = 0; shift <= room; shift += step) {
-    if (isFree({ ...title, left: title.left + shift, right: title.right + shift })) {
-      return shift;
+  for (let distance = 0; distance <= Math.max(room, back); distance += step) {
+    for (const shift of distance === 0 ? [0] : [distance, -distance]) {
+      if (shift > room || -shift > back) {
+        continue;
+      }
+      if (isFree({ ...title, left: title.left + shift, right: title.right + shift })) {
+        return shift;
+      }
     }
   }
   return 0;
@@ -69,12 +76,21 @@ export function titleShift(
 
 const LINE_ROOM = 3;
 
-/** Slides a group's title along its top edge off any flow or text it is drawn on. */
-function slideTitleClear(svg: SVGSVGElement, text: SVGTextElement, edge: number): void {
+/**
+ * Slides a group's title right along its top edge, by at most what leaves it inside an edge
+ * `edge` units long, off any flow, text or lane border it is drawn on. `move` moves it.
+ */
+function slideTitleClear(
+  svg: SVGSVGElement,
+  text: SVGGraphicsElement,
+  edge: number,
+  move: (shift: number) => void,
+  back = 0
+): void {
   if (typeof text.getBoundingClientRect !== 'function') {
     return;
   }
-  const at = text.getBoundingClientRect();
+  const at = (text.querySelector('foreignObject div') ?? text).getBoundingClientRect();
   if (!(at.width > 0)) {
     return;
   }
@@ -123,9 +139,40 @@ function slideTitleClear(svg: SVGSVGElement, text: SVGTextElement, edge: number)
       (t) => t.left < box.right && box.left < t.right && t.top < box.bottom && box.top < t.bottom
     );
   const room = (edge - at.width / scale) * scale;
-  const shift = titleShift(title, room, isFree);
-  if (shift > 0) {
-    text.setAttribute('x', String(Number(text.getAttribute('x')) + shift / scale));
+  const shift = titleShift(title, room, isFree, back * scale);
+  if (shift !== 0) {
+    move(shift / scale);
+  }
+}
+
+const translateOf = (element: Element): [number, number] | undefined => {
+  const match = /translate\(\s*([\d+.e-]+)[\s,]+([\d+.e-]+)\s*\)/.exec(
+    element.getAttribute('transform') ?? ''
+  );
+  return match ? [Number(match[1]), Number(match[2])] : undefined;
+};
+
+/** Slides the title of each group a lane holds off any flow or text it is drawn on. */
+export function clearGroupTitles(svg: SVGSVGElement | null): void {
+  if (!svg || typeof svg.getScreenCTM !== 'function') {
+    return;
+  }
+  for (const group of svg.querySelectorAll('g.bpmn-group')) {
+    const title = group.querySelector<SVGGraphicsElement>(':scope > g.cluster-label');
+    const outline = group.querySelector<SVGRectElement>('rect.outer');
+    const at = title && translateOf(title);
+    if (!title || !outline || !at || !title.textContent?.trim()) {
+      continue;
+    }
+    const left = Number(outline.getAttribute('x'));
+    const right = left + Number(outline.getAttribute('width'));
+    slideTitleClear(
+      svg,
+      title,
+      right - 10 - at[0],
+      (shift) => title.setAttribute('transform', `translate(${at[0] + shift}, ${at[1]})`),
+      Math.max(0, at[0] - left - 10)
+    );
   }
 }
 
@@ -169,7 +216,9 @@ export function drawSpanningGroups(svg: SVGSVGElement | null, groups: SpanningGr
       text.textContent = group.label;
       element.append(text);
       layer.append(element);
-      slideTitleClear(svg, text, right - left - 20);
+      slideTitleClear(svg, text, right - left - 20, (shift) =>
+        text.setAttribute('x', String(left + 10 + shift))
+      );
       continue;
     }
     layer.append(element);

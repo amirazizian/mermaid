@@ -8,7 +8,7 @@ import type { LayoutData } from '../../rendering-util/types.js';
 import utils from '../../utils.js';
 import { avoidCaptionCrossings, keepCaptionRoomBeside } from './captionPlacement.js';
 import { decorateFlows } from './flowDecorations.js';
-import { drawSpanningGroups } from './spanningGroups.js';
+import { clearGroupTitles, drawSpanningGroups } from './spanningGroups.js';
 
 export const getClasses = function (
   _text: string,
@@ -166,6 +166,7 @@ export const draw = async function (_text: string, id: string, _version: string,
   await render(data4Layout, svg);
   placeSubprocessContents(svg, contents);
   avoidCaptionCrossings(svg.node());
+  clearGroupTitles(svg.node());
   decorateFlows(svg.node());
   drawSpanningGroups(
     svg.node(),
