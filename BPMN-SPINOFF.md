@@ -10,6 +10,10 @@ pnpm install --frozen-lockfile   # Node 22, pnpm 10
 pnpm build:mermaid               # writes packages/mermaid/dist/, including mermaid.min.js
 ```
 
+`pnpm build:mermaid` cleans every package first, which removes `@mermaid-js/parser`'s type
+declarations. The pre-commit hook type-checks the docs against them, so after a build run
+`pnpm build:types` once before committing.
+
 `packages/mermaid/dist/mermaid.min.js` is a self-contained IIFE bundle: load it in a page with a
 `<script>` tag and call `mermaid.render(id, text)` or `mermaid.run()`, as with the official build.
 
