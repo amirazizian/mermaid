@@ -32,6 +32,22 @@ const boxOf = (node: LayoutNode | undefined): Box | null => {
   };
 };
 
+/**
+ * The box of what is drawn for a node: `metadata.drawnExtent` about its centre when its shape
+ * draws smaller than its layout box, such as an event whose caption is placed below it.
+ */
+const drawnBoxOf = (node: LayoutNode): Box | null => {
+  const box = boxOf(node);
+  const drawn = (node.metadata as { drawnExtent?: { width?: unknown; height?: unknown } })
+    ?.drawnExtent;
+  const { width, height } = drawn ?? {};
+  if (!box || typeof width !== 'number' || typeof height !== 'number') {
+    return box;
+  }
+  const [x, y] = [(box.left + box.right) / 2, (box.top + box.bottom) / 2];
+  return { left: x - width / 2, right: x + width / 2, top: y - height / 2, bottom: y + height / 2 };
+};
+
 const alongSpan = (low: number, high: number, index: number, count: number): number =>
   low + ((high - low) * (index + 1)) / (count + 1);
 
@@ -83,15 +99,24 @@ interface Axis {
   across: 'x' | 'y';
   low: 'left' | 'top';
   high: 'right' | 'bottom';
+  acrossLow: 'left' | 'top';
   acrossHigh: 'right' | 'bottom';
 }
 
-const VERTICAL: Axis = { along: 'y', across: 'x', low: 'top', high: 'bottom', acrossHigh: 'right' };
+const VERTICAL: Axis = {
+  along: 'y',
+  across: 'x',
+  low: 'top',
+  high: 'bottom',
+  acrossLow: 'left',
+  acrossHigh: 'right',
+};
 const HORIZONTAL: Axis = {
   along: 'x',
   across: 'y',
   low: 'left',
   high: 'right',
+  acrossLow: 'top',
   acrossHigh: 'bottom',
 };
 
@@ -135,13 +160,70 @@ function detour(a: Point, b: Point, blockers: Box[], ends: Box[]): Point[] {
   ];
 }
 
+/**
+ * The run from `a` to `b` taken past the nodes it would pass through, along a track beside
+ * them on the nearer side that is clear. Each end joins that track the shortest clear way:
+ * straight from its border when the border reaches the track, as a participant's does, else
+ * out of its side facing the track, else out of the border the run left from and across in
+ * the gap between the end and the nodes. Null when no way round is clear of `obstacles`.
+ */
+function detourPastNodes(
+  a: Point,
+  b: Point,
+  blockers: Box[],
+  ends: [Box, Box],
+  obstacles: Box[]
+): Point[] | null {
+  const axis = a.x === b.x ? VERTICAL : HORIZONTAL;
+  const forward = b[axis.along] > a[axis.along];
+  const near = (box: Box) => (forward ? box[axis.low] : box[axis.high]);
+  const far = (box: Box) => (forward ? box[axis.high] : box[axis.low]);
+  const first = forward ? Math.min(...blockers.map(near)) : Math.max(...blockers.map(near));
+  const last = forward ? Math.max(...blockers.map(far)) : Math.min(...blockers.map(far));
+  const across = a[axis.across];
+  const sides = [
+    Math.max(...blockers.map((box) => box[axis.acrossHigh])) + DETOUR_CLEARANCE,
+    Math.min(...blockers.map((box) => box[axis.acrossLow])) - DETOUR_CLEARANCE,
+  ].sort((p, q) => Math.abs(p - across) - Math.abs(q - across));
+
+  /** The ways from the border point `p` of `box` onto the track at `side`, `gap` along. */
+  const legs = (box: Box, p: Point, gap: number, side: number): Point[][] => {
+    if (box[axis.acrossLow] < side && side < box[axis.acrossHigh]) {
+      return [[at(axis, p[axis.along], side)]];
+    }
+    const middle = (box[axis.low] + box[axis.high]) / 2;
+    const face = side > box[axis.acrossHigh] ? box[axis.acrossHigh] : box[axis.acrossLow];
+    return [
+      [at(axis, middle, face), at(axis, middle, side)],
+      [p, at(axis, gap, across), at(axis, gap, side)],
+    ];
+  };
+  const clear = (path: Point[]) =>
+    path.slice(1).every((end, i) => !obstacles.some((box) => crosses(path[i], end, box)));
+
+  for (const side of sides) {
+    const heads = legs(ends[0], a, (a[axis.along] + first) / 2, side);
+    const tails = legs(ends[1], b, (last + b[axis.along]) / 2, side).map((leg) => leg.reverse());
+    for (const head of heads) {
+      for (const tail of tails) {
+        const path = [...head, ...tail];
+        if (clear(path)) {
+          return path;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 type EndsOf = (edge: LayoutEdge) => [string, string] | null;
 
 function drawRuns(
   linksPerPair: Map<string, LayoutEdge[]>,
   endsOf: EndsOf,
   byId: Map<string, LayoutNode>,
-  obstaclesFor: (ends: [string, string]) => Box[]
+  obstaclesFor: (ends: [string, string]) => Box[],
+  nodesBesides: (ends: [string, string]) => Box[]
 ): void {
   for (const links of linksPerPair.values()) {
     for (const [index, edge] of links.entries()) {
@@ -158,9 +240,26 @@ function drawRuns(
       if (!run) {
         continue;
       }
-      const blockers = obstaclesFor(ends).filter((box) => crosses(run[0], run[1], box));
+      const participants = obstaclesFor(ends);
+      const blockers = participants.filter((box) => crosses(run[0], run[1], box));
+      if (blockers.length > 0) {
+        (edge as { points?: Point[] }).points = detour(run[0], run[1], blockers, [from, to]);
+        continue;
+      }
+      // A node inside one of the participants, such as a task between the end and the border
+      // the run leaves from, is passed beside what is drawn of it rather than run through.
+      const nodes = nodesBesides(ends);
+      const nodeBlockers = nodes.filter((box) => crosses(run[0], run[1], box));
       (edge as { points?: Point[] }).points =
-        blockers.length === 0 ? run : detour(run[0], run[1], blockers, [from, to]);
+        nodeBlockers.length === 0
+          ? run
+          : (detourPastNodes(
+              run[0],
+              run[1],
+              nodeBlockers,
+              [from, to],
+              [...nodes, ...participants]
+            ) ?? run);
     }
   }
 }
@@ -201,8 +300,9 @@ export function foreignParticipantBoxes(
 
 /**
  * Draws each flow that ends on a pool or a lane as a straight run between the facing borders,
- * or, when another pool or lane lies across that run, as a detour round them. A layout
- * without a pool is left alone, so a plain swimlane routes a flow to a lane as it always has.
+ * or, when another pool or lane lies across that run, as a detour round them, and when a node
+ * lies across it, as a detour beside that node. A layout without a pool is left alone, so a
+ * plain swimlane routes a flow to a lane as it always has.
  */
 export function linkParticipantBands(layout: LayoutData): void {
   const nodes = layout.nodes ?? [];
@@ -239,5 +339,14 @@ export function linkParticipantBands(layout: LayoutData): void {
   const obstaclesFor = (ends: [string, string]): Box[] =>
     foreignParticipantBoxes(nodes, ends[0], ends[1]);
 
-  drawRuns(linksPerPair, endsOf, byId, obstaclesFor);
+  const leafBoxes = nodes
+    .filter((node) => !node.isGroup && !node.isEdgeLabel)
+    .map((node) => ({ id: node.id, box: drawnBoxOf(node) }));
+  const nodesBesides = (ends: [string, string]): Box[] =>
+    leafBoxes
+      .filter(({ id }) => !ends.includes(id))
+      .map(({ box }) => box)
+      .filter((box): box is Box => box !== null);
+
+  drawRuns(linksPerPair, endsOf, byId, obstaclesFor, nodesBesides);
 }
