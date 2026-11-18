@@ -29,6 +29,7 @@ import {
   swapDestinationTerminalTailsToReduceCrossings,
 } from './direction/materializedGeometry.js';
 import { simplifyDetouredEdges } from './direction/detourSimplification.js';
+import { rerouteDetouredEdges } from './direction/detourRerouting.js';
 import { anchorLabelsToPolyline } from './direction/labelAnchoring.js';
 import { straightenCollinearSiblingDetours } from './direction/siblingSharedFaceRouting.js';
 import { nudgeSharedInteriorSubpaths } from './direction/sharedTrackNudging.js';
@@ -210,6 +211,10 @@ export function postProcessSwimlaneLayout(layout: LayoutData, direction?: string
   shiftLeftLaneTitleBandsLeftOfRails(edges, nodeByIdMap, direction);
 
   cropEdgeEndsToShapes(edges, nodeByIdMap);
+  // An edge that still detours, turns many times or runs along its own end is routed afresh
+  // where a route through the space round it is clearly better. Its ends are then met at their
+  // vertices and borders as any other edge's.
+  rerouteDetouredEdges(edges, nodeByIdMap);
   meetDiamondsAtTheirVertex(edges, nodeByIdMap);
   approachBordersSquarely(edges, nodeByIdMap);
   anchorLabelsOfDeclaredShapes(edges, nodeByIdMap, contentNodes);
