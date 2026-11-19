@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable no-console -- a command-line tool reports on the console */
 /**
  * Renders diagram files in Chromium and counts layout defects, so a change to the layout can be
  * judged by numbers as well as by eye.
@@ -46,11 +47,17 @@ const args = process.argv.slice(2);
 const opts = { tb: false, both: false, detail: false, json: undefined, files: [] };
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (a === '--tb') opts.tb = true;
-  else if (a === '--both') opts.both = true;
-  else if (a === '--detail') opts.detail = true;
-  else if (a === '--json') opts.json = args[++i];
-  else opts.files.push(a);
+  if (a === '--tb') {
+    opts.tb = true;
+  } else if (a === '--both') {
+    opts.both = true;
+  } else if (a === '--detail') {
+    opts.detail = true;
+  } else if (a === '--json') {
+    opts.json = args[++i];
+  } else {
+    opts.files.push(a);
+  }
 }
 
 let chromium;
@@ -61,7 +68,9 @@ try {
 }
 let browser;
 for (const executablePath of [undefined, process.env.CHROME_PATH, '/opt/pw-browsers/chromium']) {
-  if (executablePath !== undefined && !existsSync(executablePath)) continue;
+  if (executablePath !== undefined && !existsSync(executablePath)) {
+    continue;
+  }
   try {
     browser = await chromium.launch(
       executablePath ? { executablePath, args: ['--no-sandbox'] } : {}
@@ -81,7 +90,7 @@ await page.evaluate(() =>
 );
 
 const withDirection = (text, direction) =>
-  text.replace(/^(\s*bpmn-beta)(?:[ \t]+(?:LR|RL|TB|TD|BT))?[ \t]*$/m, `$1 ${direction}`);
+  text.replace(/^(\s*bpmn-beta)(?:[\t ]+(?:LR|RL|TB|TD|BT))?[\t ]*$/m, `$1 ${direction}`);
 
 /** Runs in the page: measures the diagram drawn in #c. */
 function measure() {
@@ -107,7 +116,9 @@ function measure() {
   const shapes = [];
   for (const node of svg.querySelectorAll('g.node')) {
     const marks = [...node.querySelectorAll(BODY)].filter((m) => m.closest('g.node') === node);
-    if (!marks.length) continue;
+    if (!marks.length) {
+      continue;
+    }
     const rects = marks.map((m) => box(m.getBoundingClientRect()));
     const b = {
       l: Math.min(...rects.map((r) => r.l)),
@@ -136,8 +147,10 @@ function measure() {
   };
   for (const node of svg.querySelectorAll('g.node')) {
     const label = node.querySelector(':scope > g.label, :scope > g.bpmn-frame-title');
-    const b = label && label.textContent.trim() ? textBox(label) : undefined;
-    if (b) texts.push({ kind: 'caption', owner: idOf(node), box: b, node });
+    const b = label?.textContent.trim() ? textBox(label) : undefined;
+    if (b) {
+      texts.push({ kind: 'caption', owner: idOf(node), box: b, node });
+    }
   }
   for (const label of svg.querySelectorAll('g.edgeLabel')) {
     const b = label.textContent.trim() ? textBox(label) : undefined;
@@ -150,14 +163,18 @@ function measure() {
     'g.cluster g.cluster-label, .bpmn-spanning-group text'
   )) {
     const b = label.textContent.trim() ? textBox(label) : undefined;
-    if (b) texts.push({ kind: 'title', owner: label.textContent.trim(), box: b });
+    if (b) {
+      texts.push({ kind: 'title', owner: label.textContent.trim(), box: b });
+    }
   }
   // Flows, sampled along the drawn path.
   const flows = [];
   for (const path of svg.querySelectorAll('path[data-id^="bpmn-edge-"]')) {
     const len = path.getTotalLength();
     const ctm = path.getScreenCTM();
-    if (!ctm || !(len > 0)) continue;
+    if (!ctm || !(len > 0)) {
+      continue;
+    }
     const pts = [];
     const step = 2;
     for (let s = 0; s <= len; s += step) {
@@ -191,11 +208,15 @@ function measure() {
     const crossed = new Set();
     for (const p of f.pts) {
       for (const s of shapeAt(p)) {
-        if (ends.has(s) || inside(s) || crossed.has(s)) continue;
+        if (ends.has(s) || inside(s) || crossed.has(s)) {
+          continue;
+        }
         // A frame's own border band only; its inside belongs to its content.
         if (s.frame) {
           const inner = shrink(s.box, 4);
-          if (p.x > inner.l && p.x < inner.r && p.y > inner.t && p.y < inner.b) continue;
+          if (p.x > inner.l && p.x < inner.r && p.y > inner.t && p.y < inner.b) {
+            continue;
+          }
         }
         const core = shrink(s.box, 2);
         if (p.x > core.l && p.x < core.r && p.y > core.t && p.y < core.b) {
@@ -207,8 +228,12 @@ function measure() {
     const textHit = new Set();
     for (const p of f.pts) {
       for (const t of texts) {
-        if (textHit.has(t)) continue;
-        if (t.kind === 'flowLabel' && t.owner === f.id) continue;
+        if (textHit.has(t)) {
+          continue;
+        }
+        if (t.kind === 'flowLabel' && t.owner === f.id) {
+          continue;
+        }
         const c = shrink(t.box, 1);
         if (p.x > c.l && p.x < c.r && p.y > c.t && p.y < c.b) {
           textHit.add(t);
@@ -226,14 +251,20 @@ function measure() {
     for (let i = 1; i < f.pts.length; i++) {
       const dx = f.pts[i].x - f.pts[i - 1].x;
       const dy = f.pts[i].y - f.pts[i - 1].y;
-      if (Math.hypot(dx, dy) < 0.5) continue;
+      if (Math.hypot(dx, dy) < 0.5) {
+        continue;
+      }
       const d = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'E' : 'W') : dy > 0 ? 'S' : 'N';
-      if (dir && d !== dir) bends++;
+      if (dir && d !== dir) {
+        bends++;
+      }
       dir = d;
     }
     // Rounded corners sample as two turns each.
     const corners = Math.round(bends / 2);
-    if (corners > 4) add('bends', `${f.id} has ${corners} bends`);
+    if (corners > 4) {
+      add('bends', `${f.id} has ${corners} bends`);
+    }
   }
   // A flow that goes round one of its own ends: away from the end it later meets, coming back
   // within 8px of that shape anywhere but its first and last 14px.
@@ -260,14 +291,15 @@ function measure() {
         const pts = f.pts.slice(skipHead, f.pts.length - skipTail);
         for (const p of pts) {
           const inZone = p.x > zone.l && p.x < zone.r && p.y > zone.t && p.y < zone.b;
-          if (!inZone) away = true;
-          else if (away && skipHead && !flagged) {
+          if (!inZone) {
+            away = true;
+          } else if (away && skipHead && !flagged) {
             // left its start shape's zone, then came back to it
             flagged = true;
           }
         }
         // Count points inside the zone in the middle of the flow.
-        const middle = f.pts.slice(10, f.pts.length - 10);
+        const middle = f.pts.slice(10, -10);
         const near = middle.filter(
           (p) => p.x > zone.l && p.x < zone.r && p.y > zone.t && p.y < zone.b
         ).length;
@@ -282,17 +314,23 @@ function measure() {
     const first = f.pts[0];
     const last = f.pts[f.pts.length - 1];
     for (const s of shapes) {
-      if (s.frame) continue;
+      if (s.frame) {
+        continue;
+      }
       const touchesEnd = [first, last].some(
         (p) =>
           p.x >= s.box.l - 12 && p.x <= s.box.r + 12 && p.y >= s.box.t - 12 && p.y <= s.box.b + 12
       );
-      if (touchesEnd) continue;
+      if (touchesEnd) {
+        continue;
+      }
       const band = { l: s.box.l - 6, t: s.box.t - 6, r: s.box.r + 6, b: s.box.b + 6 };
       const n = f.pts.filter(
         (p) => p.x > band.l && p.x < band.r && p.y > band.t && p.y < band.b
       ).length;
-      if (n >= 8) add('hugsShape', `${f.id} along ${s.id}`);
+      if (n >= 8) {
+        add('hugsShape', `${f.id} along ${s.id}`);
+      }
     }
   }
   // A flow label away from its own line, or on a lane or pool border.
@@ -305,8 +343,9 @@ function measure() {
       const cx = (t.box.l + t.box.r) / 2;
       const cy = (t.box.t + t.box.b) / 2;
       const d = Math.min(...f.pts.map((p) => Math.hypot(p.x - cx, p.y - cy)));
-      if (d > Math.max(12, (t.box.b - t.box.t) / 2 + 8))
+      if (d > Math.max(12, (t.box.b - t.box.t) / 2 + 8)) {
         add('labelAway', `label of ${t.owner} is ${Math.round(d)}px off its line`);
+      }
     }
     for (const b of borders) {
       const hits =
@@ -329,16 +368,19 @@ function measure() {
     const others = flows.filter(
       (f) => f.id !== own && f.pts.some((p) => p.x > b.l && p.x < b.r && p.y > b.t && p.y < b.b)
     );
-    if (others.length)
+    if (others.length) {
       add('envelopeOnLine', `envelope of ${own} on ${others.map((f) => f.id).join(', ')}`);
+    }
     if (texts.some((t) => overlap(t.box, b)) || shapes.some((s) => !s.frame && overlap(s.box, b))) {
       add('envelopeOnLine', `envelope of ${own} on text or shape`);
     }
   }
   // Crossings between flows.
-  const segs = (f) => {
+  const segmentsOf = (f) => {
     const out = [];
-    for (let i = 1; i < f.pts.length; i++) out.push([f.pts[i - 1], f.pts[i]]);
+    for (let i = 1; i < f.pts.length; i++) {
+      out.push([f.pts[i - 1], f.pts[i]]);
+    }
     return out;
   };
   const cross = (a, b) => {
@@ -350,18 +392,22 @@ function measure() {
     return d1 * d2 < 0 && d3 * d4 < 0;
   };
   for (let a = 0; a < flows.length; a++) {
-    const sa = segs(flows[a]);
+    const sa = segmentsOf(flows[a]);
     for (let b = a + 1; b < flows.length; b++) {
-      const sb = segs(flows[b]);
+      const sb = segmentsOf(flows[b]);
       let n = 0;
       let lastHit = -10;
-      for (let i = 0; i < sa.length; i++) {
-        if (sb.some((s) => cross(sa[i], s))) {
-          if (i - lastHit > 3) n++;
+      for (const [i, element] of sa.entries()) {
+        if (sb.some((s) => cross(element, s))) {
+          if (i - lastHit > 3) {
+            n++;
+          }
           lastHit = i;
         }
       }
-      for (let k = 0; k < n; k++) add('crossing', `${flows[a].id} x ${flows[b].id}`);
+      for (let k = 0; k < n; k++) {
+        add('crossing', `${flows[a].id} x ${flows[b].id}`);
+      }
     }
   }
   // Flows along one track.
@@ -375,10 +421,13 @@ function measure() {
         if (cells.has(key(p))) {
           run++;
           longest = Math.max(longest, run);
-        } else run = 0;
+        } else {
+          run = 0;
+        }
       }
-      if (longest * 2 > 6 + 4)
+      if (longest * 2 > 6 + 4) {
         add('lineOnLine', `${flows[a].id} and ${flows[b].id} share ${longest * 2}px`);
+      }
     }
   }
   for (let a = 0; a < texts.length; a++) {
@@ -391,16 +440,24 @@ function measure() {
       }
     }
     for (const s of shapes) {
-      if (texts[a].node === s.node) continue;
+      if (texts[a].node === s.node) {
+        continue;
+      }
       if (s.frame) {
         // Text inside a frame is its content; only its border band counts.
         const inner = shrink(s.box, 4);
         const t = texts[a].box;
-        if (t.l > inner.l && t.r < inner.r && t.t > inner.t && t.b < inner.b) continue;
-        if (t.r < s.box.l || t.l > s.box.r || t.b < s.box.t || t.t > s.box.b) continue;
+        if (t.l > inner.l && t.r < inner.r && t.t > inner.t && t.b < inner.b) {
+          continue;
+        }
+        if (t.r < s.box.l || t.l > s.box.r || t.b < s.box.t || t.t > s.box.b) {
+          continue;
+        }
         const crossesBorder = !(t.l > s.box.l && t.r < s.box.r && t.t > s.box.t && t.b < s.box.b);
         if (crossesBorder || t.t < inner.t || t.b > inner.b || t.l < inner.l || t.r > inner.r) {
-          if (texts[a].owner === s.id) continue;
+          if (texts[a].owner === s.id) {
+            continue;
+          }
           add('textOnShape', `${texts[a].kind} of ${texts[a].owner} on frame ${s.id}`);
         }
         continue;
@@ -416,13 +473,17 @@ function measure() {
   for (const f of flows) {
     for (const end of [f.pts[0], f.pts[f.pts.length - 1]]) {
       for (const s of shapes) {
-        if (s.corner === undefined) continue;
+        if (s.corner === undefined) {
+          continue;
+        }
         const { l, t, r, b } = s.box;
         const onV =
           (Math.abs(end.x - l) < 3 || Math.abs(end.x - r) < 3) && end.y > t - 3 && end.y < b + 3;
         const onH =
           (Math.abs(end.y - t) < 3 || Math.abs(end.y - b) < 3) && end.x > l - 3 && end.x < r + 3;
-        if (!onV && !onH) continue;
+        if (!onV && !onH) {
+          continue;
+        }
         const along = onH ? Math.min(end.x - l, r - end.x) : Math.min(end.y - t, b - end.y);
         if (along < s.corner) {
           add('cornerPort', `${f.id} at a corner of ${s.id}`);
@@ -446,7 +507,9 @@ function measure() {
           end.y >= s.box.t - 6 &&
           end.y <= s.box.b + 6
       );
-      if (!ev) continue;
+      if (!ev) {
+        continue;
+      }
       const cx = (ev.box.l + ev.box.r) / 2;
       const cy = (ev.box.t + ev.box.b) / 2;
       const r = (ev.box.r - ev.box.l) / 2;
@@ -492,10 +555,14 @@ function measure() {
       .sort((a, b) => area(a) - area(b))[0];
     if (!holding) {
       // In a diagram with lanes, a shape whose centre lies in none of them hangs outside.
-      if (bodies.length) add('outsideLane', `${s.id} outside every lane`);
+      if (bodies.length) {
+        add('outsideLane', `${s.id} outside every lane`);
+      }
       continue;
     }
-    if (pokesOut(s.box, holding)) add('outsideLane', `${s.id} past its lane`);
+    if (pokesOut(s.box, holding)) {
+      add('outsideLane', `${s.id} past its lane`);
+    }
     const caption = texts.find((t) => t.kind === 'caption' && t.node === s.node);
     if (caption && pokesOut(caption.box, holding)) {
       add('outsideLane', `caption of ${s.id} past its lane`);
@@ -505,11 +572,17 @@ function measure() {
     for (let b = a + 1; b < shapes.length; b++) {
       const A = shapes[a];
       const B = shapes[b];
-      if (A.boundary || B.boundary) continue;
+      if (A.boundary || B.boundary) {
+        continue;
+      }
       const contains = (x, y) =>
         x.box.l <= y.box.l && x.box.r >= y.box.r && x.box.t <= y.box.t && x.box.b >= y.box.b;
-      if ((A.frame && contains(A, B)) || (B.frame && contains(B, A))) continue;
-      if (overlap(A.box, B.box)) add('shapeOnShape', `${A.id} and ${B.id}`);
+      if ((A.frame && contains(A, B)) || (B.frame && contains(B, A))) {
+        continue;
+      }
+      if (overlap(A.box, B.box)) {
+        add('shapeOnShape', `${A.id} and ${B.id}`);
+      }
     }
   }
   return issues;
@@ -540,22 +613,19 @@ for (const file of opts.files) {
   const source = await readFile(file, 'utf8');
   for (const direction of variants) {
     const text = direction ? withDirection(source, direction) : source;
-    const result = await page.evaluate(
-      async ({ text, fn }) => {
-        try {
-          const { svg } = await window.mermaid.render(
-            'd' + Math.random().toString(36).slice(2),
-            text
-          );
-          document.getElementById('c').innerHTML = svg;
-          // eslint-disable-next-line no-new-func
-          return { issues: new Function(`return (${fn})()`)() };
-        } catch (e) {
-          return { error: String(e?.message ?? e) };
-        }
-      },
-      { text, fn: measure.toString() }
-    );
+    const rendered = await page.evaluate(async (text) => {
+      try {
+        const { svg } = await window.mermaid.render(
+          'd' + Math.random().toString(36).slice(2),
+          text
+        );
+        document.getElementById('c').innerHTML = svg;
+        return {};
+      } catch (e) {
+        return { error: String(e?.message ?? e) };
+      }
+    }, text);
+    const result = rendered.error ? rendered : { issues: await page.evaluate(measure) };
     const name = `${path.basename(file)}${direction ? ` ${direction}` : ''}`;
     if (result.error) {
       results.push({ name, error: result.error });
@@ -591,10 +661,14 @@ for (const r of results) {
     continue;
   }
   const total = KINDS.reduce((s, k) => s + r.counts[k], 0);
-  for (const k of KINDS) totals[k] += r.counts[k];
+  for (const k of KINDS) {
+    totals[k] += r.counts[k];
+  }
   console.log(pad(r.name, 40) + KINDS.map((k) => pad(r.counts[k] || '.', 5)).join('') + total);
   if (opts.detail) {
-    for (const i of r.issues) console.log(`    ${i.kind}: ${i.what}`);
+    for (const i of r.issues) {
+      console.log(`    ${i.kind}: ${i.what}`);
+    }
   }
 }
 console.log(
@@ -603,4 +677,6 @@ console.log(
     KINDS.reduce((s, k) => s + totals[k], 0)
 );
 console.log('columns: ' + KINDS.join(', '));
-if (opts.json) await writeFile(opts.json, JSON.stringify(results, null, 2));
+if (opts.json) {
+  await writeFile(opts.json, JSON.stringify(results, null, 2));
+}

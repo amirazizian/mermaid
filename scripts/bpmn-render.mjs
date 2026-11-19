@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+/* eslint-disable no-console -- a command-line tool reports on the console */
+/* eslint-disable @typescript-eslint/restrict-template-expressions, @typescript-eslint/no-floating-promises -- untyped script */
 /**
  * Renders mermaid diagram files (written for `bpmn-beta`, or any other diagram type) to SVG
  * and, with --png, to PNG, using the IIFE bundle built from this checkout and the
@@ -23,7 +25,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const debug = Boolean(process.env.BPMN_RENDER_DEBUG);
-// BPMN_RENDER_DEBUG=1 loads the unminified bundle and prints the stack of a failure.
+// BPMN_RENDER_DEBUG=1 loads the readable (not minified) bundle and prints the stack of a failure.
 const bundle = path.resolve(
   here,
   `../packages/mermaid/dist/${debug ? 'mermaid.js' : 'mermaid.min.js'}`
@@ -33,17 +35,24 @@ const args = process.argv.slice(2);
 const opts = { png: false, xml: false, scale: 2, theme: 'default', out: undefined, files: [] };
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
-  if (a === '--png') opts.png = true;
-  else if (a === '--xml') opts.xml = true;
-  else if (a === '--scale') opts.scale = Number(args[++i]);
-  else if (a === '--theme') opts.theme = args[++i];
-  else if (a === '--out') opts.out = args[++i];
-  else if (a === '-h' || a === '--help') {
+  if (a === '--png') {
+    opts.png = true;
+  } else if (a === '--xml') {
+    opts.xml = true;
+  } else if (a === '--scale') {
+    opts.scale = Number(args[++i]);
+  } else if (a === '--theme') {
+    opts.theme = args[++i];
+  } else if (a === '--out') {
+    opts.out = args[++i];
+  } else if (a === '-h' || a === '--help') {
     console.log(
       'usage: node scripts/bpmn-render.mjs [--png] [--xml] [--scale N] [--theme T] [--out dir] file.mmd ...'
     );
     process.exit(0);
-  } else opts.files.push(a);
+  } else {
+    opts.files.push(a);
+  }
 }
 if (!opts.files.length) {
   console.error('no input files; see --help');

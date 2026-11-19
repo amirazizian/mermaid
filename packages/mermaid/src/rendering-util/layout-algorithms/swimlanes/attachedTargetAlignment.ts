@@ -11,7 +11,7 @@
  * Runs in the layout's own space, after the attached nodes are pinned and before the edges are
  * routed, where the flow runs down the y axis and across the x axis.
  */
-import type { LayoutData, Node } from '../types.js';
+import type { LayoutData, Node } from '../../types.js';
 import { readAnchor } from './anchoredNodes.js';
 
 type Direction = 'TB' | 'BT' | 'LR' | 'RL';
