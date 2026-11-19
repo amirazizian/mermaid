@@ -61,6 +61,11 @@ export interface VertexContext {
   vertexAt: (side: VertexSide) => Point | undefined;
   /** The node's own drawn shape, which a way must not run back through. */
   ownShape: RectBounds;
+  /**
+   * The shape the node sits on the border of (a boundary event's host), if any. A way must
+   * leave on the outer side: not run along the border, nor under the host.
+   */
+  ownHost?: RectBounds;
   /** The node's id, whose caption room a way may leave through but not run on in. */
   ownId: string;
   obstacles: Obstacle[];
@@ -169,6 +174,11 @@ export function segmentEntersRect(a: Point, b: Point, rect: RectBounds, inset = 
   );
 }
 
+/** What running along the host's side costs a way from a node on the host's border. */
+const HOST_HUG_COST = 300;
+/** How far outside its host's border a way from a node on that border still runs along it. */
+const ON_HOST_BORDER = 1.5;
+
 /** How far inside a side a run along it still counts as on it. */
 const ON_BORDER = 0.5;
 
@@ -265,10 +275,17 @@ export function costOfWay(
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i];
     const b = points[i + 1];
-    if (segmentEntersRect(a, b, context.ownShape)) {
+    if (
+      segmentEntersRect(a, b, context.ownShape) ||
+      (context.ownHost && segmentEntersRect(a, b, context.ownHost, -ON_HOST_BORDER))
+    ) {
       cost += SHAPE_COST;
     } else if (segmentHugsRect(a, b, context.ownShape, OWN_HUG_GAP)) {
       cost += OWN_HUG_COST;
+    }
+    // Along the host's side, a way from a node on its border reads as the host's own line.
+    if (context.ownHost && segmentHugsRect(a, b, context.ownHost, OWN_HUG_GAP)) {
+      cost += HOST_HUG_COST + lengthOf([a, b]);
     }
     for (const obstacle of context.obstacles) {
       if (obstacle.id === context.ownId) {

@@ -11,6 +11,7 @@ import {
 } from './geometry.js';
 import type { Point, RectBounds } from './geometry.js';
 import type { Node } from '../../../types.js';
+import { readAnchor } from '../anchoredNodes.js';
 import {
   assignSides,
   CAPTION_VERTEX_COST,
@@ -671,6 +672,19 @@ function levelsPast(node: any, vertex: Point, side: VertexSide): number[] {
   return room > 1 ? [VERTEX_STUB, room + VERTEX_STUB] : [VERTEX_STUB];
 }
 
+/**
+ * The drawn shape of the host a node is attached to with no stand-off (a boundary event on its
+ * task's border), if it is.
+ */
+function hostOfAttached(node: any, nodeByIdMap: Map<string, any>): RectBounds | undefined {
+  const anchor = readAnchor(node);
+  if (!anchor || anchor.gap) {
+    return undefined;
+  }
+  const host = nodeByIdMap.get(anchor.hostId);
+  return host && !host.isGroup ? endpointRectOf(host) : undefined;
+}
+
 export const labelNodeIdOf = (edge: RoutedEdge) =>
   `edge-label-${edge.start}-${edge.end}-${edge.id}`;
 
@@ -722,6 +736,7 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
     const context: VertexContext = {
       vertexAt: (side) => vertexOf(node, side),
       ownShape,
+      ownHost: hostOfAttached(node, nodeByIdMap),
       ownId: String(id),
       obstacles,
       exempt: (edge) => new Set([String(id), labelNodeIdOf(edge as RoutedEdge)]),
