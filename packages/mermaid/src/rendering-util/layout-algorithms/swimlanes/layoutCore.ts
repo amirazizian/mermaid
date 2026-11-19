@@ -4,6 +4,7 @@ import { toGraphView, writeBackToLayoutData } from './helpers.js';
 import { sugiyamaLayout } from './pipeline.js';
 import { routeEdgesOrthogonal } from './orthogonalRouter/router.js';
 import { pinAnchoredNodes } from './anchoredNodes.js';
+import { alignTargetsOfAttachedFlows } from './attachedTargetAlignment.js';
 
 export type SwimlaneDirection = 'TB' | 'LR' | 'BT' | 'RL';
 
@@ -72,6 +73,7 @@ export function runSwimlaneLayoutCore(data4Layout: LayoutData): SwimlaneDirectio
   writeBackToLayoutData(g, ordered, coordinates, { nodeGap, layerGap, direction });
 
   pinAnchoredNodes(data4Layout, { space: 'canonical', direction });
+  alignTargetsOfAttachedFlows(data4Layout, direction);
 
   // The layout phases above position nodes only; they do not emit edge routing.
   // Reset any edge points carried on the input so routeEdgesOrthogonal below is
