@@ -23,6 +23,8 @@ const EPS = 1e-6;
 const MIN_PORT_SPACING = 8;
 const PORT_SHIFT = MIN_PORT_SPACING;
 const TRY_DELTAS = [0, PORT_SHIFT, -PORT_SHIFT, 2 * PORT_SHIFT, -2 * PORT_SHIFT];
+/** How far out of the face it leaves an L must run before it turns. */
+const TURN_CLEARANCE = 12;
 
 interface PointLite {
   x: number;
@@ -175,6 +177,13 @@ export function portSwapToLShape(edges: Edge[], nodes: Node[]): void {
         np0 = { x: newSrcX, y: newSrcY };
         np1 = { x: p3.x, y: newSrcY };
         np2 = { x: p3.x, y: p3.y };
+      }
+
+      // The turn must stand clear of the face it leaves: a turn on the face, or just off it,
+      // sends the second leg along the source's own side, out of its corner.
+      const turnOut = isHVH ? Math.abs(np1.y - np0.y) : Math.abs(np1.x - np0.x);
+      if (turnOut < TURN_CLEARANCE) {
+        continue;
       }
 
       // Degenerate: if np1 === np2, the "L" collapses to a straight line.
