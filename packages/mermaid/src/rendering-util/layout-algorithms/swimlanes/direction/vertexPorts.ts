@@ -214,6 +214,19 @@ export function segmentHugsRect(a: Point, b: Point, rect: RectBounds, gap: numbe
   return false;
 }
 
+/** How long segment a-b runs beside rect, along the side it runs by. */
+function besideLength(a: Point, b: Point, rect: RectBounds): number {
+  return Math.abs(a.y - b.y) < EPS
+    ? Math.max(
+        0,
+        Math.min(Math.max(a.x, b.x), rect.right) - Math.max(Math.min(a.x, b.x), rect.left)
+      )
+    : Math.max(
+        0,
+        Math.min(Math.max(a.y, b.y), rect.bottom) - Math.max(Math.min(a.y, b.y), rect.top)
+      );
+}
+
 function strictlyCross(a1: Point, b1: Point, a2: Point, b2: Point): boolean {
   const h1 = Math.abs(a1.y - b1.y) < EPS;
   const h2 = Math.abs(a2.y - b2.y) < EPS;
@@ -324,7 +337,8 @@ export function costOfWay(
         // The far end's caption moves off the line like the node's own, where it can.
         cost += TEXT_COST;
       } else if (obstacle.shape && segmentHugsRect(a, b, obstacle.shape, HUG_GAP)) {
-        cost += HUG_COST + lengthOf([a, b]);
+        // Per pixel of the stretch that runs beside the shape, not of the whole segment.
+        cost += HUG_COST + besideLength(a, b, obstacle.shape);
         // Closer still, the line reads as the shape's own border.
         if (segmentHugsRect(a, b, obstacle.shape, TOUCH_GAP)) {
           cost += TOUCH_COST;
