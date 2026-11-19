@@ -28,6 +28,8 @@
  *                     and count in the categories above)
  *   boundaryLeg       a flow at a boundary event that does not meet the event's ring, or whose
  *                     first leg runs on or under the host the event sits on
+ *   cornerPort        a flow that meets an activity or a frame at a corner, within its corner
+ *                     radius and a few px of it
  * Exit code 0; the numbers are the result.
  */
 import { readFile, writeFile } from 'node:fs/promises';
@@ -115,7 +117,15 @@ function measure() {
     };
     const frame = node.classList.contains('bpmn-subprocess-frame');
     const boundary = node.classList.contains('bpmn-event-boundary');
-    shapes.push({ id: idOf(node), box: b, node, frame, boundary });
+    // A flat-sided shape (an activity or a frame), and how near its corner a line may not meet
+    // it: the radius of its rounded corners and a few px.
+    const flatMark = marks.find((m) => m.matches('rect.bpmn-activity-rect, .bpmn-frame-outline'));
+    // In screen px, as the boxes are: a wide diagram is drawn scaled down.
+    const scale = flatMark?.getScreenCTM()?.a ?? 1;
+    const corner = flatMark
+      ? (Math.max(Number(flatMark.getAttribute('rx')) || 0, 10) + 4) * scale
+      : undefined;
+    shapes.push({ id: idOf(node), box: b, node, frame, boundary, corner });
   }
   // Texts: captions, flow labels, cluster titles, frame titles.
   const texts = [];
@@ -401,6 +411,26 @@ function measure() {
       }
     }
   }
+  // Flows that meet a flat-sided shape at, or within its corner radius (and a few px) of, a
+  // corner.
+  for (const f of flows) {
+    for (const end of [f.pts[0], f.pts[f.pts.length - 1]]) {
+      for (const s of shapes) {
+        if (s.corner === undefined) continue;
+        const { l, t, r, b } = s.box;
+        const onV =
+          (Math.abs(end.x - l) < 3 || Math.abs(end.x - r) < 3) && end.y > t - 3 && end.y < b + 3;
+        const onH =
+          (Math.abs(end.y - t) < 3 || Math.abs(end.y - b) < 3) && end.x > l - 3 && end.x < r + 3;
+        if (!onV && !onH) continue;
+        const along = onH ? Math.min(end.x - l, r - end.x) : Math.min(end.y - t, b - end.y);
+        if (along < s.corner) {
+          add('cornerPort', `${f.id} at a corner of ${s.id}`);
+          break;
+        }
+      }
+    }
+  }
   // Flows at a boundary event: the line must meet the event's ring, and its first leg must run
   // outside the host the event sits on, not under it.
   for (const f of flows) {
@@ -502,6 +532,7 @@ const KINDS = [
   'crossing',
   'outsideLane',
   'boundaryLeg',
+  'cornerPort',
 ];
 const results = [];
 const variants = opts.both ? ['LR', 'TB'] : [opts.tb ? 'TB' : undefined];
