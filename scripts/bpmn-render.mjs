@@ -19,7 +19,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -177,11 +177,10 @@ async function loadXmlExport() {
     process.exit(2);
   }
   const sources = path.resolve(here, '../packages/mermaid/src/diagrams/bpmn');
-  const { parseBpmn } = await tsImport(
-    path.join(sources, 'parser/bpmn.parser.ts'),
-    import.meta.url
-  );
-  const { toBpmnXml } = await tsImport(path.join(sources, 'bpmnXml.ts'), import.meta.url);
+  // The ESM loader takes a URL, not a path: on Windows a `C:\...` path reads as the scheme `c:`.
+  const sourceUrl = (file) => pathToFileURL(path.join(sources, file)).href;
+  const { parseBpmn } = await tsImport(sourceUrl('parser/bpmn.parser.ts'), import.meta.url);
+  const { toBpmnXml } = await tsImport(sourceUrl('bpmnXml.ts'), import.meta.url);
   const { version } = JSON.parse(
     await readFile(path.resolve(here, '../packages/mermaid/package.json'), 'utf8')
   );
