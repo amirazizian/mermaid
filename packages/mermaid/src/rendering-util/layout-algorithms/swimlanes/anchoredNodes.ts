@@ -1,5 +1,7 @@
 import type { LayoutData, Node } from '../../types.js';
 import { buildLaneModel } from './lanes.js';
+import { choosePlacements, placedCentre } from './attachedPlacement.js';
+import type { AttachedPlacement, PlacementSide } from './attachedPlacement.js';
 
 type Direction = 'TB' | 'LR' | 'BT' | 'RL';
 
@@ -582,8 +584,11 @@ export function pinAnchoredNodes(
   layout: LayoutData,
   opts: { space: 'canonical' | 'final'; direction: Direction }
 ): AnchorPin[] {
-  const nodes = layout.nodes ?? [];
-  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const allNodes = layout.nodes ?? [];
+  const byId = new Map(allNodes.map((node) => [node.id, node]));
+  const pins: AnchorPin[] = [];
+  const placedOnBorder = placeAttachedByTheirFlows(layout, opts, byId, pins);
+  const nodes = allNodes.filter((node) => !placedOnBorder.has(node.id));
   const buckets = bucketByHostAndSide(
     nodes,
     (anchor) =>
@@ -593,8 +598,7 @@ export function pinAnchoredNodes(
         : (anchor.side ?? defaultAnchorSide('final', opts.direction)))
   );
 
-  const pins: AnchorPin[] = [];
-  const busy = hostsWithFlowsAcrossPools(nodes, layout.edges);
+  const busy = hostsWithFlowsAcrossPools(allNodes, layout.edges);
   for (const bucket of spreadAcrossBothSides(buckets, opts.direction, busy).values()) {
     if (bucket.length === 0) {
       continue;
@@ -665,6 +669,103 @@ export function pinAnchoredNodes(
   }
 
   return pins;
+}
+
+/** The places chosen for attached nodes when first pinned, kept for the pin in drawn space. */
+const chosenPlaces = new WeakMap<Node, AttachedPlacement>();
+
+/** The side a place in the layout's own space becomes when drawn. */
+function drawnSide(side: PlacementSide, direction: Direction): PlacementSide {
+  if (direction !== 'LR') {
+    return side;
+  }
+  const turned: Record<PlacementSide, PlacementSide> = {
+    right: 'bottom',
+    left: 'top',
+    bottom: 'right',
+    top: 'left',
+  };
+  return turned[side];
+}
+
+/**
+ * Pins the nodes attached to a host's border with no stand-off and no side of their own (BPMN
+ * boundary events) at the places their flows want (see `attachedPlacement.ts`), in TB and LR.
+ * Returns the ids it pinned; the others are pinned by the runs below.
+ */
+function placeAttachedByTheirFlows(
+  layout: LayoutData,
+  opts: { space: 'canonical' | 'final'; direction: Direction },
+  byId: Map<string, Node>,
+  pins: AnchorPin[]
+): Set<string> {
+  const done = new Set<string>();
+  if (opts.direction !== 'TB' && opts.direction !== 'LR') {
+    return done;
+  }
+  const byHost = new Map<string, Node[]>();
+  for (const node of layout.nodes ?? []) {
+    const anchor = readAnchor(node);
+    if (!anchor || anchor.gap || anchor.side || anchor.slot !== undefined || !hasUsableSize(node)) {
+      continue;
+    }
+    const hostId = resolveAnchorHostId(node.id, byId);
+    if (hostId) {
+      byHost.set(hostId, [...(byHost.get(hostId) ?? []), node]);
+    }
+  }
+  const layoutSides: PlacementSide[] =
+    opts.direction === 'TB' ? ['bottom', 'top'] : ['right', 'left'];
+  const fallback: AttachedPlacement =
+    opts.direction === 'TB' ? { side: 'bottom', slot: 1 } : { side: 'right', slot: 0 };
+  for (const [hostId, attached] of byHost) {
+    const host = byId.get(hostId);
+    if (!host || ![host.x, host.y, host.width, host.height].every(isFiniteNumber)) {
+      continue;
+    }
+    if (opts.space === 'canonical' || attached.some((node) => !chosenPlaces.has(node))) {
+      const sides =
+        opts.space === 'canonical'
+          ? layoutSides
+          : layoutSides.map((side) => drawnSide(side, opts.direction));
+      const fallbackHere =
+        opts.space === 'canonical'
+          ? fallback
+          : { ...fallback, side: drawnSide(fallback.side, opts.direction) };
+      const chosen = choosePlacements(host, attached, layout, sides, fallbackHere);
+      if (!chosen) {
+        continue;
+      }
+      for (const node of attached) {
+        const place = chosen.get(node.id)!;
+        // Kept as a place in the layout's own space.
+        chosenPlaces.set(
+          node,
+          opts.space === 'canonical'
+            ? place
+            : { ...place, side: inLayoutSpace(place.side, opts.direction) }
+        );
+      }
+    }
+    for (const node of attached) {
+      const kept = chosenPlaces.get(node)!;
+      const place =
+        opts.space === 'canonical' ? kept : { ...kept, side: drawnSide(kept.side, opts.direction) };
+      const { x, y } = placedCentre(host, node, place);
+      node.x = x;
+      node.y = y;
+      pins.push({ nodeId: node.id, hostId, side: place.side, x, y, outward: OUTWARD[place.side] });
+      done.add(node.id);
+    }
+  }
+  return done;
+}
+
+/** The side in the layout's own space that is drawn as `side`. */
+function inLayoutSpace(side: PlacementSide, direction: Direction): PlacementSide {
+  return (['top', 'right', 'bottom', 'left'] as PlacementSide[]).find(
+    (candidate) => drawnSide(candidate, direction) === side
+  )!;
 }
 
 const STUB_REACH = 16;
