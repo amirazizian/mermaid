@@ -24,12 +24,15 @@ const SHAPE_COST = 100_000;
 /** What crossing a text (a caption or another edge's label) costs. */
 export const TEXT_COST = 250;
 /** What crossing another edge costs. */
-export const CROSSING_COST = 90;
+export const CROSSING_COST = 250;
 /** What running along another edge costs, per pixel shared. */
 export const SHARED_TRACK_COST = 6;
 /** What running along another shape's side, closer than HUG_GAP, costs, and per pixel. */
 const HUG_COST = 120;
 const HUG_GAP = 16;
+/** A way closer than this along another shape's side costs TOUCH_COST on top. */
+const TOUCH_GAP = 6;
+const TOUCH_COST = 1000;
 /** What running along the node's own shape, closer than OWN_HUG_GAP, costs. */
 const OWN_HUG_COST = 40;
 const OWN_HUG_GAP = 24;
@@ -308,6 +311,10 @@ export function costOfWay(
         cost += TEXT_COST;
       } else if (obstacle.shape && segmentHugsRect(a, b, obstacle.shape, HUG_GAP)) {
         cost += HUG_COST + lengthOf([a, b]);
+        // Closer still, the line reads as the shape's own border.
+        if (segmentHugsRect(a, b, obstacle.shape, TOUCH_GAP)) {
+          cost += TOUCH_COST;
+        }
       } else if (
         obstacle.id === farEnd &&
         obstacle.shape &&

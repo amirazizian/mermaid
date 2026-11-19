@@ -66,6 +66,11 @@ const MIN_SAVING_SHARE = 0.15;
 const DETOUR_RATIO = 1.5;
 const DETOUR_SLACK = 80;
 const MANY_BENDS = 4;
+/**
+ * What a crossing costs a rerouted edge on top of what it costs elsewhere: a route a fair way
+ * longer, inside the lanes and clear of shapes and texts, is worth taking to avoid one.
+ */
+const CROSSING_EXTRA = 50;
 /** A face longer than this has ports a quarter in from its ends as well as at its middle. */
 const LONG_FACE = 160;
 /** Above this many grid lines on either axis, an edge is left as it is. */
@@ -136,11 +141,52 @@ function hugsAShape(points: Point[], ends: RectBounds[], shapes: RectBounds[]): 
   return false;
 }
 
+/** How many times a route crosses the other routes, at a right angle. */
+function crossingsOf(points: Point[], others: Point[][]): number {
+  let count = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    for (const other of others) {
+      for (let j = 0; j < other.length - 1; j++) {
+        if (crossesAtRightAngle(points[i], points[i + 1], other[j], other[j + 1])) {
+          count++;
+        }
+      }
+    }
+  }
+  return count;
+}
+
+function crossesAtRightAngle(a1: Point, b1: Point, a2: Point, b2: Point): boolean {
+  const h1 = Math.abs(a1.y - b1.y) < 1e-6;
+  const h2 = Math.abs(a2.y - b2.y) < 1e-6;
+  if (h1 === h2) {
+    return false;
+  }
+  const [h, v] = h1
+    ? [
+        [a1, b1],
+        [a2, b2],
+      ]
+    : [
+        [a2, b2],
+        [a1, b1],
+      ];
+  const y = h[0].y;
+  const x = v[0].x;
+  return (
+    x > Math.min(h[0].x, h[1].x) + 0.5 &&
+    x < Math.max(h[0].x, h[1].x) - 0.5 &&
+    y > Math.min(v[0].y, v[1].y) + 0.5 &&
+    y < Math.max(v[0].y, v[1].y) - 0.5
+  );
+}
+
 function needsRerouting(
   points: Point[],
   src: RectBounds,
   dst: RectBounds,
-  shapes: RectBounds[]
+  shapes: RectBounds[],
+  others: Point[][]
 ): boolean {
   const a = centreOf(src);
   const b = centreOf(dst);
@@ -148,7 +194,8 @@ function needsRerouting(
   return (
     lengthOf(points) > DETOUR_RATIO * direct + DETOUR_SLACK ||
     bendsOf(points) >= MANY_BENDS ||
-    hugsAShape(points, [src, dst], shapes)
+    hugsAShape(points, [src, dst], shapes) ||
+    crossingsOf(points, others) > 0
   );
 }
 
@@ -188,7 +235,7 @@ function costOfRoute(points: Point[], measure: Measure): number {
   for (const other of measure.others) {
     cost += conflictCost(points, other);
   }
-  return cost;
+  return cost + CROSSING_EXTRA * crossingsOf(points, measure.others);
 }
 
 interface OtherSegment {
@@ -231,7 +278,7 @@ function stepConflict(a: Point, b: Point, others: OtherSegment[]): number {
     const passes =
       to > from ? at > from + 1e-6 && at <= to + 1e-6 : at < from - 1e-6 && at >= to - 1e-6;
     if (passes) {
-      cost += CROSSING_COST;
+      cost += CROSSING_COST + CROSSING_EXTRA;
     }
   }
   return cost;
@@ -474,6 +521,38 @@ function searchRoute(
   return tidy([startPort.point, ...cells.reverse(), bestGoal.port.point]);
 }
 
+/** How far inside the group holding both its ends a new route keeps. */
+const GROUP_INSET = 8;
+
+/** The box of the innermost group that holds both nodes, if they share one. */
+function commonGroupBox(a: any, b: any, nodeByIdMap: Map<string, any>): RectBounds | undefined {
+  const ancestors = (node: any) => {
+    const out: any[] = [];
+    const seen = new Set<string>();
+    let parent = node?.parentId ? nodeByIdMap.get(node.parentId) : undefined;
+    while (parent && !seen.has(parent.id)) {
+      seen.add(parent.id);
+      out.push(parent);
+      parent = parent.parentId ? nodeByIdMap.get(parent.parentId) : undefined;
+    }
+    return out;
+  };
+  const ofB = new Set(ancestors(b).map((group) => group.id));
+  const shared = ancestors(a).find((group) => ofB.has(group.id));
+  if (
+    !shared ||
+    ![shared.x, shared.y, shared.width, shared.height].every((v) => typeof v === 'number')
+  ) {
+    return undefined;
+  }
+  return {
+    left: shared.x - shared.width / 2,
+    right: shared.x + shared.width / 2,
+    top: shared.y - shared.height / 2,
+    bottom: shared.y + shared.height / 2,
+  };
+}
+
 /** Reroutes edges that detour, turn many times, or run along their own ends, where it pays. */
 export function rerouteDetouredEdges(edges: unknown[], nodeByIdMap: Map<string, any>): void {
   const routed = (edges as RoutedEdge[]).filter(
@@ -502,12 +581,12 @@ export function rerouteDetouredEdges(edges: unknown[], nodeByIdMap: Map<string, 
     obstacles ??= obstaclesOf(nodeByIdMap);
     const exempt = new Set([String(edge.start), String(edge.end), labelNodeIdOf(edge)]);
     const otherShapes = obstacles.filter((o) => !exempt.has(o.id) && o.shape).map((o) => o.shape!);
-    if (old.length < 2 || !needsRerouting(old, srcRect, dstRect, otherShapes)) {
-      continue;
-    }
     const others = routed
       .filter((e) => e !== edge)
       .map((e) => dedupeConsecutivePoints(e.points!, 1e-3));
+    if (old.length < 2 || !needsRerouting(old, srcRect, dstRect, otherShapes, others)) {
+      continue;
+    }
     const measure: Measure = { obstacles, exempt, ends: [srcRect, dstRect], others };
 
     const xsOld = old.map((p) => p.x);
@@ -518,6 +597,14 @@ export function rerouteDetouredEdges(edges: unknown[], nodeByIdMap: Map<string, 
       top: Math.min(...ysOld, srcRect.top, dstRect.top) - PORT_STUB - 1,
       bottom: Math.max(...ysOld, srcRect.bottom, dstRect.bottom) + PORT_STUB + 1,
     };
+    // A new route keeps inside the group that holds both ends (their lane, or their pool).
+    const holder = commonGroupBox(src, dst, nodeByIdMap);
+    if (holder) {
+      region.left = Math.max(region.left, holder.left + GROUP_INSET);
+      region.right = Math.min(region.right, holder.right - GROUP_INSET);
+      region.top = Math.max(region.top, holder.top + GROUP_INSET);
+      region.bottom = Math.min(region.bottom, holder.bottom - GROUP_INSET);
+    }
     const overlapsRegion = (r: RectBounds) =>
       r.right > region.left &&
       r.left < region.right &&
