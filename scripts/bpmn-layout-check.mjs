@@ -26,6 +26,8 @@
  *   outsideLane       a shape, or its caption, reaches outside the innermost lane or pool body
  *                     that holds the shape's centre (association lines are flows like any other
  *                     and count in the categories above)
+ *   boundaryLeg       a flow at a boundary event that does not meet the event's ring, or whose
+ *                     first leg runs on or under the host the event sits on
  * Exit code 0; the numbers are the result.
  */
 import { readFile, writeFile } from 'node:fs/promises';
@@ -399,6 +401,53 @@ function measure() {
       }
     }
   }
+  // Flows at a boundary event: the line must meet the event's ring, and its first leg must run
+  // outside the host the event sits on, not under it.
+  for (const f of flows) {
+    for (const [end, leg] of [
+      [f.pts[0], f.pts.slice(1, 9)],
+      [f.pts[f.pts.length - 1], f.pts.slice(-9, -1)],
+    ]) {
+      const ev = shapes.find(
+        (s) =>
+          s.boundary &&
+          end.x >= s.box.l - 6 &&
+          end.x <= s.box.r + 6 &&
+          end.y >= s.box.t - 6 &&
+          end.y <= s.box.b + 6
+      );
+      if (!ev) continue;
+      const cx = (ev.box.l + ev.box.r) / 2;
+      const cy = (ev.box.t + ev.box.b) / 2;
+      const r = (ev.box.r - ev.box.l) / 2;
+      // The host: the shape whose border runs through the event's centre.
+      const host = shapes.find(
+        (s) =>
+          s !== ev &&
+          !s.boundary &&
+          (((Math.abs(cx - s.box.l) < 3 || Math.abs(cx - s.box.r) < 3) &&
+            cy >= s.box.t - 2 &&
+            cy <= s.box.b + 2) ||
+            ((Math.abs(cy - s.box.t) < 3 || Math.abs(cy - s.box.b) < 3) &&
+              cx >= s.box.l - 2 &&
+              cx <= s.box.r + 2))
+      );
+      const offRing = Math.abs(Math.hypot(end.x - cx, end.y - cy) - r) > 4;
+      const under =
+        host &&
+        leg.some(
+          (p) =>
+            Math.hypot(p.x - cx, p.y - cy) > r + 1 &&
+            p.x >= host.box.l - 1 &&
+            p.x <= host.box.r + 1 &&
+            p.y >= host.box.t - 1 &&
+            p.y <= host.box.b + 1
+        );
+      if (offRing || under) {
+        add('boundaryLeg', `${f.id} at ${ev.id} ${offRing ? 'off its ring' : 'under its host'}`);
+      }
+    }
+  }
   // Shapes and captions outside the innermost lane or pool body holding the shape's centre.
   const bodies = [
     ...svg.querySelectorAll('g.cluster rect.swimlane-body, g.cluster rect.pool-body'),
@@ -452,6 +501,7 @@ const KINDS = [
   'bends',
   'crossing',
   'outsideLane',
+  'boundaryLeg',
 ];
 const results = [];
 const variants = opts.both ? ['LR', 'TB'] : [opts.tb ? 'TB' : undefined];
