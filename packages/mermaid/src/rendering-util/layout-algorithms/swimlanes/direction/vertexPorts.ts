@@ -41,6 +41,8 @@ const OWN_HUG_GAP = 24;
  * move aside, so the vertex is not barred; it is used where it saves more than this.
  */
 export const CAPTION_VERTEX_COST = 60;
+/** What running on through the node's own caption costs: it moves aside afterwards. */
+const OWN_CAPTION_COST = 20;
 
 const EPS = 1e-6;
 /** A way that meets a flat far end closer than this to a corner of it costs NEAR_CORNER_COST. */
@@ -83,6 +85,11 @@ export interface VertexContext {
   otherRoutes: (edge: unknown) => Point[][];
   /** Extra cost of using a side, such as a caption below. */
   sideCost: (side: VertexSide) => number;
+  /**
+   * The free places a node's caption could move to off a line through it, by the node's id;
+   * undefined when that is not known, and the caption is taken to be free to move.
+   */
+  captionPlaces?: (id: string) => RectBounds[] | undefined;
   /** The rect of the far end's node, where a way may arrive anywhere along the same face. */
   farRect?: (edge: unknown) => RectBounds | undefined;
 }
@@ -292,9 +299,15 @@ export function costOfWay(
     }
     for (const obstacle of context.obstacles) {
       if (obstacle.id === context.ownId) {
-        // The way leaves through the node's own caption room, but does not run on in it.
-        if (i > 0 && obstacle.text && segmentEntersRect(a, b, obstacle.text)) {
-          cost += TEXT_COST;
+        // The way leaves through the node's own caption room, and may run on in it for a
+        // little: the caption moves off the line once the lines are drawn, to a free place the
+        // way keeps clear of. With no such place it stays on the line.
+        if (obstacle.text && segmentEntersRect(a, b, obstacle.text)) {
+          if (!captionCanMove(points, context.captionPlaces?.(context.ownId))) {
+            cost += TEXT_COST;
+          } else if (i > 0) {
+            cost += OWN_CAPTION_COST;
+          }
         }
         continue;
       }
@@ -305,9 +318,10 @@ export function costOfWay(
         cost += SHAPE_COST;
       } else if (
         obstacle.text &&
-        obstacle.id !== farEnd &&
-        segmentEntersRect(a, b, obstacle.text)
+        segmentEntersRect(a, b, obstacle.text) &&
+        (obstacle.id !== farEnd || !captionCanMove(points, context.captionPlaces?.(farEnd)))
       ) {
+        // The far end's caption moves off the line like the node's own, where it can.
         cost += TEXT_COST;
       } else if (obstacle.shape && segmentHugsRect(a, b, obstacle.shape, HUG_GAP)) {
         cost += HUG_COST + lengthOf([a, b]);
@@ -347,6 +361,16 @@ export function costOfWay(
     }
   }
   return cost;
+}
+
+/** Whether a caption has a place to move to, among `places`, that the way keeps clear of. */
+function captionCanMove(points: Point[], places: RectBounds[] | undefined): boolean {
+  return (
+    places === undefined ||
+    places.some((place) =>
+      points.every((p, i) => i === 0 || !segmentEntersRect(points[i - 1], p, place, 3))
+    )
+  );
 }
 
 /** Whether `p`, on a side of `rect`, is closer than NEAR_CORNER to one of its corners. */
@@ -569,7 +593,8 @@ function* assignments(count: number, distinct: boolean): Generator<VertexSide[]>
  */
 export function assignSides(
   options: Map<VertexSide, VertexWay>[],
-  distinct: boolean
+  distinct: boolean,
+  pairCost?: (i: number, a: VertexWay, j: number, b: VertexWay) => number
 ): (VertexWay | undefined)[] {
   const best = (o: Map<VertexSide, VertexWay>, exclude: Set<VertexSide> = new Set()) =>
     [...o.values()].filter((w) => !exclude.has(w.side)).sort((a, b) => a.cost - b.cost)[0];
@@ -588,6 +613,7 @@ export function assignSides(
         cost += ways[i]!.cost;
         for (let j = i + 1; j < ways.length; j++) {
           cost += conflictCost(ways[i]!.points, ways[j]!.points);
+          cost += pairCost?.(usable[i], ways[i]!, usable[j], ways[j]!) ?? 0;
         }
       }
       if (cost < chosenCost - 1e-6) {

@@ -15,7 +15,9 @@ import { readAnchor } from '../anchoredNodes.js';
 import {
   assignSides,
   CAPTION_VERTEX_COST,
+  TEXT_COST,
   costOfWay,
+  segmentEntersRect,
   VERTEX_SIDES,
   VERTEX_STUB,
   waysFromVertex,
@@ -672,6 +674,81 @@ function levelsPast(node: any, vertex: Point, side: VertexSide): number[] {
   return room > 1 ? [VERTEX_STUB, room + VERTEX_STUB] : [VERTEX_STUB];
 }
 
+/** Room between a shape and its caption moved beside it. */
+const CAPTION_GAP = 6;
+
+/**
+ * The places round its shape that a node's caption, written in the band under the shape, could
+ * move to once the lines are drawn (above, beside, and at the corners), keeping those clear of
+ * other shapes and texts, of the routes of other edges, and inside the group the node sits in.
+ * Undefined when the node writes no caption under its shape.
+ */
+function freeCaptionPlaces(
+  node: any,
+  shape: RectBounds,
+  obstacles: Obstacle[],
+  routes: Point[][],
+  nodeByIdMap: Map<string, any>
+): RectBounds[] | undefined {
+  const own = obstacles.find((o) => o.id === String(node.id));
+  const band = own?.text;
+  if (!band) {
+    return undefined;
+  }
+  const w = band.right - band.left;
+  const h = band.bottom - band.top;
+  const cx = (shape.left + shape.right) / 2;
+  const cy = (shape.top + shape.bottom) / 2;
+  const box = (left: number, top: number): RectBounds => ({
+    left,
+    top,
+    right: left + w,
+    bottom: top + h,
+  });
+  const places = [
+    box(cx - w / 2, shape.top - CAPTION_GAP - h),
+    box(shape.right + CAPTION_GAP, cy - h / 2),
+    box(shape.left - CAPTION_GAP - w, cy - h / 2),
+    box(shape.right, shape.bottom),
+    box(shape.left - w, shape.bottom),
+    box(shape.right, shape.top - h),
+    box(shape.left - w, shape.top - h),
+  ];
+  // The innermost group round the node, past the host it may be attached to.
+  let group = nodeByIdMap.get(node.parentId);
+  while (group && !group.isGroup) {
+    group = nodeByIdMap.get(group.parentId);
+  }
+  const groupBox = group ? rectOfNodeBounds(group) : undefined;
+  const title = group?.groupTitleRect as RectBounds | undefined;
+  const clear = (place: RectBounds) =>
+    (!groupBox ||
+      (place.left >= groupBox.left &&
+        place.right <= groupBox.right &&
+        place.top >= groupBox.top &&
+        place.bottom <= groupBox.bottom)) &&
+    !(title && overlapsRect(place, title)) &&
+    obstacles.every(
+      (o) =>
+        o.id === String(node.id) ||
+        ((!o.shape || !overlapsRect(place, o.shape)) && (!o.text || !overlapsRect(place, o.text)))
+    ) &&
+    routes.every((route) => !wayEntersPlace(route, place));
+  return places.filter(clear);
+}
+
+/** How far into a place a line may reach before the caption there would touch it. */
+const PLACE_TOLERANCE = 3;
+
+const wayEnters = (points: Point[], rect: RectBounds, inset = 0.5) =>
+  points.some((p, i) => i > 0 && segmentEntersRect(points[i - 1], p, rect, inset));
+
+const wayEntersPlace = (points: Point[], place: RectBounds) =>
+  wayEnters(points, place, PLACE_TOLERANCE);
+
+const overlapsRect = (a: RectBounds, b: RectBounds) =>
+  a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
 /**
  * The drawn shape of the host a node is attached to with no stand-off (a boundary event on its
  * task's border), if it is.
@@ -723,7 +800,6 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
     return;
   }
   const obstacles = obstaclesOf(nodeByIdMap);
-
   for (const [id, contacts] of byNode) {
     const node = nodeByIdMap.get(id);
     const ownShape = endpointRectOf(node);
@@ -732,6 +808,25 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
     }
     const ordered = [...contacts].sort((a, b) => Number(b.incoming) - Number(a.incoming));
     const here = new Set(ordered.map((c) => c.edge));
+    // Where a node's caption could move to, off the lines of the edges other than its own and
+    // those being chosen here (which are weighed against each other below).
+    const placesById = new Map<string, RectBounds[] | undefined>();
+    const captionPlaces = (nodeId: string) => {
+      if (!placesById.has(nodeId)) {
+        const owner = nodeByIdMap.get(nodeId);
+        const shape = owner ? endpointRectOf(owner) : undefined;
+        const routes = routed
+          .filter((e) => !here.has(e) && e.start !== nodeId && e.end !== nodeId && e.points)
+          .map((e) => e.points!);
+        placesById.set(
+          nodeId,
+          owner && shape
+            ? freeCaptionPlaces(owner, shape, obstacles, routes, nodeByIdMap)
+            : undefined
+        );
+      }
+      return placesById.get(nodeId);
+    };
     const captionBelow = writesAQuestionBelow(node);
     const context: VertexContext = {
       vertexAt: (side) => vertexOf(node, side),
@@ -754,6 +849,7 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
       otherRoutes: (edge) =>
         routed.filter((e) => e !== edge && !here.has(e) && e.points).map((e) => e.points!),
       sideCost: (side) => (side === 'bottom' && captionBelow ? CAPTION_VERTEX_COST : 0),
+      captionPlaces,
     };
 
     const options = ordered.map((contact) => {
@@ -791,7 +887,31 @@ export function meetDiamondsAtTheirVertex(edges: unknown[], nodeByIdMap: Map<str
       return perSide;
     });
 
-    const chosen = assignSides(options, wantsOneLinePerCorner(node));
+    // Two ways that leave a caption one of them runs through no free place between them.
+    const captionOwners = (i: number) => {
+      const contact = ordered[i];
+      const far = contact.atStart ? contact.edge.end : contact.edge.start;
+      return [String(id), ...(far ? [String(far)] : [])];
+    };
+    const pairCost = (i: number, a: VertexWay, j: number, b: VertexWay) => {
+      let cost = 0;
+      for (const owner of new Set([...captionOwners(i), ...captionOwners(j)])) {
+        const band = obstacles.find((o) => o.id === owner)?.text;
+        const places = captionPlaces(owner);
+        if (!band || !places) {
+          continue;
+        }
+        const crossed = [a, b].some((w) => wayEnters(w.points, band));
+        const free = places.some(
+          (p) => !wayEntersPlace(a.points, p) && !wayEntersPlace(b.points, p)
+        );
+        if (crossed && !free) {
+          cost += TEXT_COST;
+        }
+      }
+      return cost;
+    };
+    const chosen = assignSides(options, wantsOneLinePerCorner(node), pairCost);
     ordered.forEach((contact, i) => {
       const way = chosen[i];
       if (!way) {

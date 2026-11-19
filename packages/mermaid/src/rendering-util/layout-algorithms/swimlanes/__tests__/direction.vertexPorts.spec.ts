@@ -156,9 +156,9 @@ describe('a vertex way past the shapes and texts round it', () => {
     }
   });
 
-  it('turns past its own caption, not through it', () => {
-    // The event sits on the bottom border of a task; its caption is written under it. The flow
-    // leaves downward and turns to the right, to an event level with the task.
+  // The event sits on the bottom border of a task; its caption is written under it. The flow
+  // leaves downward and turns to the right, to an event level with the task.
+  const captionCase = (...more: { id: string }[]) => {
     const task = flat('t', 36, 0, 121, 80);
     const target = {
       id: 'e',
@@ -169,17 +169,28 @@ describe('a vertex way past the shapes and texts round it', () => {
       metadata: { endpointProfile: 'vertex', drawnExtent: { width: 36, height: 36 } },
     };
     const flow = edge('m', 'b', 'e', { x: 54, y: 48 }, { x: 164, y: 48 }, { x: 164, y: 18 });
-    meetDiamondsAtTheirVertex([flow], nodes(boundaryEvent(36, 40), task, target));
+    meetDiamondsAtTheirVertex([flow], nodes(boundaryEvent(36, 40), task, target, ...more));
     const caption = { left: 13, right: 59, top: 58, bottom: 88 };
-    for (let i = 1; i < flow.points.length - 1; i++) {
-      const [a, b] = [flow.points[i], flow.points[i + 1]];
-      const inside =
+    return flow.points.some((a, i) => {
+      const b = flow.points[i + 1];
+      return (
+        i > 0 &&
+        b !== undefined &&
         Math.max(a.x, b.x) > caption.left &&
         Math.min(a.x, b.x) < caption.right &&
         Math.max(a.y, b.y) > caption.top &&
-        Math.min(a.y, b.y) < caption.bottom;
-      expect(inside).toBe(false);
-    }
+        Math.min(a.y, b.y) < caption.bottom
+      );
+    });
+  };
+
+  it('turns in its own caption where the caption can move aside, to below the left', () => {
+    expect(captionCase()).toBe(true);
+  });
+
+  it('turns past its own caption where the caption has nowhere to go', () => {
+    // A node under the left of the event takes the one place the caption could move to.
+    expect(captionCase(flat('x', -5, 73, 30, 30))).toBe(false);
   });
 });
 
